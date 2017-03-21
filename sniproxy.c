@@ -16,10 +16,33 @@
 #include <errno.h>
 #include <sys/socket.h>
 
+#include "compat.h"
 #include "sniproxy.h"
+#include "tls.h"
+
+
+enum snip_state {
+    snip_state_record_header = 0,
+    snip_state_reading_record,
+    snip_state_error_not_tls,
+    snip_state_error_invalid_tls_version,
+    snip_state_error_found_http,
+    snip_state_error_protocol_violation,
+    snip_state_have_client_hello,
+    snip_state_sni_found,
+    snip_state_sni_not_found
+
+};
 
 typedef struct snip_pair {
     struct bufferevent *client_bev;
+
+    enum snip_state state;
+    size_t current_record_start;
+    uint16_t current_record_length;
+    uint32_t current_message_length;
+
+    struct evbuffer *handshake_buffer;
 
     evutil_socket_t client_fd;
     struct sockaddr_storage client_address; // Hold the address locally in this structure.
@@ -30,7 +53,12 @@ typedef struct snip_pair {
     struct sockaddr_storage target_address; // Hold the address locally in this structure.
     size_t target_address_len;
 
+    uint16_t sni_hostname_length;
+    char *sni_hostname;
+
     int references;
+
+    struct snip_TLS_version client_version;
 } snip_pair;
 
 /**
@@ -74,6 +102,41 @@ snip_client_release(
 }
 
 /**
+ * Get the length of data held in the handshake buffer.
+ * @param client
+ * @return
+ */
+size_t
+snip_get_handshake_buffer_length(snip_pair *client) {
+    // If the ClientHello is contained in a single TLS record, we can just borrow their buffer.
+    if(!client->handshake_buffer) {
+        return client->current_record_length;
+    }
+    return evbuffer_get_length(client->handshake_buffer);
+}
+
+/**
+ * Return a pointer to contiguous chunk of memory containing all of the handshake data we have so far.
+ *
+ * @param client
+ * @param input
+ * @param pullup
+ * @param available [OUT] - Number of bytes available in the buffer
+ * @return The start of the handshake message buffer.
+ */
+unsigned char *
+snip_get_handshake_buffer(snip_pair *client, struct evbuffer *input, size_t pullup, size_t *available) {
+    // If the ClientHello is contained in a single TLS record, we can just borrow their buffer.
+    if(!client->handshake_buffer) {
+        *available = client->current_record_length;
+        return evbuffer_pullup(input, client->current_record_length + SNIP_TLS_RECORD_HEADER_LENGTH) +
+               SNIP_TLS_RECORD_HEADER_LENGTH;
+    }
+    *available = evbuffer_get_length(client->handshake_buffer);
+    return evbuffer_pullup(client->handshake_buffer, -1);
+}
+
+/**
  * Handle incoming data on the client-connection.
  * @param bev
  * @param ctx
@@ -83,23 +146,280 @@ client_read_cb(
         struct bufferevent *bev,
         void *ctx
 ) {
-    /* This callback is invoked when there is data to read on bev. */
+    // Initially we're just peeking on the request, so we don't remove anything from the input buffer until we
+    // understand where the client is trying to get, and have connected to their ultimate destination.
     struct evbuffer *input = bufferevent_get_input(bev);
     struct evbuffer *output = bufferevent_get_output(bev);
 
     snip_pair *client = (snip_pair *) ctx;
+    size_t available_input = evbuffer_get_length(input);
+    size_t available_record = 0;
+    size_t available_handshake = 0;
+
+    uint16_t extension_server_name_length;
+    size_t extension_server_name_offset;
+    uint8_t extension_server_name_type;
+    uint16_t extension_server_name_blob_length;
+    uint16_t extension_id;
+
+    uint16_t extension_length;
+
+    uint16_t extensions_section_length;
+    size_t extensions_section_start;
+
+    uint16_t tmp16;
+    uint32_t tmp32;
+
+    unsigned char *buffer = NULL;
+    unsigned char *handshake_data;
+    size_t offset = 0;
+    while(1) {
+        switch (client->state) {
+            case snip_state_record_header:
+                // This is the beginning of the connection.  The first record SHOULD be a handshake message with type
+                // ClientHello.  The ClientHello message *could* (but likely isn't) be split across multiple records.
+                // We can get the length of the current record, and the total length of the ClientHello message with
+                // fixed offsets from the beginning.  We can also verify that the versions and other fields match our
+                // expectations.
+                if ((available_input - client->current_record_start) < SNIP_TLS_RECORD_HEADER_LENGTH) {
+                    return; // Come back when there's enough data.
+                }
+                buffer = evbuffer_pullup(input, client->current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH);
+
+                // This MUST be a handshake record.
+                if((buffer[0] != SNIP_TLS_RECORD_TYPE_HANDSHAKE))
+                {
+                    client->state = snip_state_error_not_tls;
+                    break;
+                }
+
+                // Clients set the version on the frame to their lowest supported version. SSLv1 was never released,
+                // SSLv2 had the same ClientHello format (though did not support extensions).  3.3 (TLSv3) is still a
+                // draft, but holds the same ClientHello format. Since this is set to the client's LOWEST version, we'll
+                // accept SSLv2 for now, but if that's their highest supported (or even SSLv3) we're not going to have a
+                // lot useful to say to them.  For now we'll be conservative and won't pretend to understand anything
+                // the TLS1.3 draft.
+                if(buffer[1] < 0x02 || buffer[1] > 0x03 || buffer[2] > 0x03) {
+                    client->state = snip_state_error_invalid_tls_version;
+                    break;
+                }
+
+                memcpy(&tmp16, buffer + 3, sizeof(uint16_t));
+                client->current_record_length = ntohs(tmp16);
+
+                if((client->current_record_length & 0x8000) || client->current_record_length == 0) {
+                    // Max length is 2^14, can't be 0
+                    client->state = snip_state_error_protocol_violation;
+                    break;
+                }
+                client->state = snip_state_reading_record;
+                break;
+            case snip_state_reading_record:
+                // libevent is handling the buffering so we'll pull out the whole record at once. Can't be > than 16k
+                offset = client->current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH;
+                if((available_input - offset) < client->current_record_length) {
+                    // Wait for more input.
+                    return;
+                }
+
+                buffer = evbuffer_pullup(
+                        input,
+                        client->current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH + client->current_record_length
+                );
+
+                if(client->handshake_buffer) {
+                    // This isn't the first record, add this record's data to the last so we can ultimately get a single
+                    // concatenated message.
+                    evbuffer_add(client->handshake_buffer,
+                                 buffer + client->current_record_start, client->current_record_length);
+                }
+
+                if(!client->current_message_length) {
+                    // We don't know how long the handshake message is yet.
+                    handshake_data = snip_get_handshake_buffer(
+                            client, input, SNIP_TLS_HANDSHAKE_HEADER_LENGTH, &available_handshake);
+                    if(available_handshake >= SNIP_TLS_HANDSHAKE_HEADER_LENGTH)
+                    {
+                        if(handshake_data[0] != SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_CLIENT_HELLO) {
+                            // The first message MUST be a ClientHello
+                            client->state = snip_state_error_protocol_violation;
+                            break;
+                        }
+                        memcpy(&tmp32, handshake_data, sizeof(uint32_t));
+                        // Could be slower, but doesn't make assumptions about endianess that bit math does.
+                        memset(&tmp32, '\0', SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH);
+                        client->current_message_length = ntohl(tmp32);
+                    }
+                }
+
+                available_handshake = snip_get_handshake_buffer_length(client);
+                if(client->current_message_length && (available_handshake >= client->current_message_length)) {
+                    // Ok, cool, we've got the whole ClientHello
+                    client->state = snip_state_have_client_hello;
+                    break;
+                }
+
+                // Ok, if we're here, we haven't yet captured all of the ClientHello.
+                if(!client->handshake_buffer) {
+                    // We delay creating this buffer because its not necessary if the data is already contiguious
+                    client->handshake_buffer = evbuffer_new();
+                    // If we know the size, pre-allocate.
+                    evbuffer_expand(client->handshake_buffer,
+                                    MAX(client->current_message_length, client->current_record_length));
+                    evbuffer_add(client->handshake_buffer,
+                                 buffer + client->current_record_start, client->current_record_length);
+                }
+
+                // Setup to read the next record.
+                client->current_record_start = client->current_record_start +
+                                               SNIP_TLS_RECORD_HEADER_LENGTH + client->current_record_length;
+                client->current_record_length = 0;
+
+                client->state = snip_state_record_header;
+                break;
+            case snip_state_have_client_hello:
+                // Done reading, just process.
+                handshake_data = snip_get_handshake_buffer(
+                        client, input, client->current_message_length, &available_handshake);
+                offset = SNIP_TLS_HANDSHAKE_HEADER_LENGTH; // We've already dealt with the header
+                client->client_version.major = *(handshake_data + offset);
+                client->client_version.minor = *(handshake_data + offset + 1);
+                offset += SNIP_TLS_CLIENT_HELLO_VERSION_LENGTH;
+
+                offset += SNIP_TLS_CLIENT_HELLO_RANDOM_LENGTH;
+                if(offset + SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_LENGTH > available_handshake) {
+                    client->state = snip_state_error_protocol_violation;
+                    break;
+                }
+                offset += SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_LENGTH + *(handshake_data + offset);
+
+                // Skip the variable length cipher-suite section
+                if((offset + SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE) > available_handshake) {
+                    client->state = snip_state_error_protocol_violation;
+                    break;
+                }
+                memcpy(&tmp16, handshake_data + offset, SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE);
+                offset += SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE + ntohs(tmp16);
+
+                if((offset + SNIP_TLS_CLIENT_HELLO_COMPRESSION_METHOD_LENGTH_SIZE) > available_handshake) {
+                    client->state = snip_state_error_protocol_violation;
+                    break;
+                }
+
+                offset += handshake_data[offset] + SNIP_TLS_CLIENT_HELLO_COMPRESSION_METHOD_LENGTH_SIZE;
+                if((offset + SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_LENGTH) > available_handshake) {
+                    client->state = snip_state_error_protocol_violation;
+                    break;
+                }
+
+
+                memcpy(&tmp16, handshake_data + offset, sizeof(uint16_t));
+                offset += SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_LENGTH;
+                // SOooo many redundant lengths.  We'll track em all just to be sure.
+                extensions_section_start = offset;
+                extensions_section_length = ntohs(tmp16);
+
+                // Extensions take up the rest of the ClientHello.  They have a 16bit identifier, a 16bit length,
+                // followed by a dynamic section.
+                while (((offset +
+                         SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH +
+                         SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_LENGTH) < available_handshake) &&
+                         (extensions_section_length > (offset - extensions_section_start))
+                        )
+                {
+                    memcpy(&tmp16, handshake_data + offset, sizeof(uint16_t));
+                    extension_id = ntohs(tmp16);
+                    offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH;
+
+                    memcpy(&tmp16, handshake_data + offset, sizeof(uint16_t));
+                    extension_length = ntohs(tmp16);
+                    offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_LENGTH;
+
+                    if(extension_id == 0)
+                    {
+                        memcpy(&tmp16, handshake_data + offset, sizeof(uint16_t));
+                        extension_server_name_length = ntohs(tmp16);
+                        offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LENGTH_LENGTH;
+
+                        extension_server_name_offset = 0;
+                        while(extension_server_name_offset < extension_server_name_length) {
+                            extension_server_name_type = *(handshake_data + offset + extension_server_name_offset);
+
+                            extension_server_name_offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_LENGTH;
+                            memcpy(&tmp16, handshake_data+offset+extension_server_name_offset, sizeof(uint16_t));
+                            extension_server_name_blob_length = ntohs(tmp16);
+                            extension_server_name_offset +=
+                                    SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_NAME_LENGTH_LENGTH;
+
+                            if(extension_server_name_type == SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_HOST_NAME)
+                            {
+                                // The structures allow for multiple instances of this record.  We'll take the last
+                                // though it seems unlikely.
+                                if(client->sni_hostname) {
+                                    free(client->sni_hostname);
+                                }
+
+                                client->sni_hostname_length = extension_server_name_blob_length;
+                                client->sni_hostname = (char *) malloc(client->sni_hostname_length + 1);
+                                // We allocate and 0 an extra byte so the string can be guaranteed null terminated.
+                                memset(client->sni_hostname, '\0', client->sni_hostname_length + 1);
+                                memcpy(client->sni_hostname,
+                                       handshake_data+offset+extension_server_name_offset,
+                                       client->sni_hostname_length);
+                                extension_server_name_offset += client->sni_hostname_length;
+
+                                printf("SNI: (%d) %s\n", client->sni_hostname_length, client->sni_hostname);
+                            }
+                            extension_server_name_offset += extension_server_name_blob_length;
+                        }
+                    }
+                    offset += extension_length;
+                }
+                if(client->sni_hostname_length) {
+                    client->state = snip_state_sni_found;
+                }
+                else {
+                    client->state = snip_state_sni_not_found;
+                }
+                break;
+            case snip_state_sni_found:
+                break;
+            case snip_state_sni_not_found:
+                break;
+            case snip_state_error_not_tls:
+                // So it looks like this isn't TLS, or at least isn't a version we know.  It may be that the client
+                // connected with HTTP, in which case we can at least provide a helpful error. Apache does something
+                // similar.
+                buffer = evbuffer_pullup(input, 5);
+                if(!memcmp(buffer, "GET /", 5) || !memcmp(buffer, "POST ", 5) || !memcmp(buffer, "HEAD ", 5)) {
+                    client->state = snip_state_error_found_http;
+                    break;
+                }
+                break;
+            case snip_state_error_protocol_violation:
+            case snip_state_error_invalid_tls_version:
+                printf("Error\n");
+                break;
+            case snip_state_error_found_http:
+                break;
+
+        }
+    }
     if(!client->target_hostname) {
         // We don't know the target_hostname yet, so we're trying to read the first line. If we don't have an EOL, let our input
         // buffer keep growing.
         // TODO - We should set a limit on how large we'll let the buffer grow.
         // TODO - This will ultimately be switched to inspect the SNI, but lets avoid that complexity now.
-        struct evbuffer_ptr eol_at = evbuffer_search_eol(input, NULL, NULL, EVBUFFER_EOL_CRLF);
-        if(eol_at.pos != -1) {
-            // Read in the target_hostname.
-            client->target_hostname = evbuffer_readln(input,NULL, EVBUFFER_EOL_CRLF);
-            // TODO - Validate the target_hostname.
-            printf("Got target: %s\n", client->target_hostname);
-        }
+
+        char buffer[8];
+
+//        struct evbuffer_ptr eol_at = evbuffer_search_eol(input, NULL, NULL, EVBUFFER_EOL_CRLF);
+//        if(eol_at.pos != -1) {
+//            // Read in the target_hostname.
+//            client->target_hostname = evbuffer_readln(input,NULL, EVBUFFER_EOL_CRLF);
+//            // TODO - Validate the target_hostname.
+//            printf("Got target: %s\n", client->target_hostname);
+//        }
     }
     else {
 

@@ -15,7 +15,7 @@ find_package(OpenSSL REQUIRED)
 include_directories(${OPENSSL_INCLUDE_DIR})
 set(LIBS ${LIBS} ${OPENSSL_LIBRARIES})
 
-set(SOURCE_FILES main.c sniproxy.c sniproxy.h)
+set(SOURCE_FILES main.c sniproxy.c sniproxy.h tls.h compat.h)
 add_executable(sniproxy ${SOURCE_FILES})
 
 target_link_libraries(sniproxy ${LIBS})
