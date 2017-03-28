@@ -19,6 +19,8 @@
 #include <errno.h>
 #include <sys/socket.h>
 
+struct snip_context;
+
 /**
  * Start listening a given port.
  * @param base - Event base.
@@ -27,5 +29,25 @@
  */
 struct evconnlistener *
 snip_start_listening(struct event_base *base, uint16_t port);
+
+/**
+ * Create the snip_context object.
+ * @return
+ */
+struct snip_context *
+snip_context_create();
+
+/**
+ * Initialize the context, with event bases and the like.
+ */
+void
+snip_context_init(struct snip_context *context, int argc, char **argv);
+
+/**
+ *
+ */
+void snip_reload_config(struct snip_context *context);
+
+
 
 #endif //SNIPROXY_SNIPROXY_H

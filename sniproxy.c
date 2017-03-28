@@ -3,6 +3,7 @@
 //
 
 #include <event2/event.h>
+#include <event2/dns.h>
 
 #include <event2/listener.h>
 #include <event2/bufferevent.h>
@@ -20,24 +21,38 @@
 #include "sniproxy.h"
 #include "tls.h"
 
+struct snip_context {
+    struct snip_config *config;
+    struct evdns_base *dns_base;
+    struct event_base *event_base;
 
-enum snip_state {
-    snip_state_record_header = 0,
-    snip_state_reading_record,
-    snip_state_error_not_tls,
-    snip_state_error_invalid_tls_version,
-    snip_state_error_found_http,
-    snip_state_error_protocol_violation,
-    snip_state_have_client_hello,
-    snip_state_sni_found,
-    snip_state_sni_not_found
+    struct event *hup_event;
+    int pending_reload;
+};
+
+
+enum snip_pair_state {
+    snip_pair_state_record_header = 0,
+    snip_pair_state_reading_record,
+    snip_pair_state_error_not_tls,
+    snip_pair_state_error_invalid_tls_version,
+    snip_pair_state_error_found_http,
+    snip_pair_state_error_protocol_violation,
+    snip_pair_state_have_client_hello,
+    snip_pair_state_sni_found,
+    snip_pair_state_sni_not_found,
+    snip_pair_state_waiting_for_dns,
+    snip_pair_state_waiting_for_connect,
+    snip_pair_state_proxying,
+    snip_pair_state_error_dns_failed,
+    snip_pair_state_error_connect_failed
 
 };
 
 typedef struct snip_pair {
     struct bufferevent *client_bev;
 
-    enum snip_state state;
+    enum snip_pair_state state;
     size_t current_record_start;
     uint16_t current_record_length;
     uint32_t current_message_length;
@@ -175,7 +190,7 @@ client_read_cb(
     size_t offset = 0;
     while(1) {
         switch (client->state) {
-            case snip_state_record_header:
+            case snip_pair_state_record_header:
                 // This is the beginning of the connection.  The first record SHOULD be a handshake message with type
                 // ClientHello.  The ClientHello message *could* (but likely isn't) be split across multiple records.
                 // We can get the length of the current record, and the total length of the ClientHello message with
@@ -189,7 +204,7 @@ client_read_cb(
                 // This MUST be a handshake record.
                 if((buffer[0] != SNIP_TLS_RECORD_TYPE_HANDSHAKE))
                 {
-                    client->state = snip_state_error_not_tls;
+                    client->state = snip_pair_state_error_not_tls;
                     break;
                 }
 
@@ -200,7 +215,7 @@ client_read_cb(
                 // lot useful to say to them.  For now we'll be conservative and won't pretend to understand anything
                 // the TLS1.3 draft.
                 if(buffer[1] < 0x02 || buffer[1] > 0x03 || buffer[2] > 0x03) {
-                    client->state = snip_state_error_invalid_tls_version;
+                    client->state = snip_pair_state_error_invalid_tls_version;
                     break;
                 }
 
@@ -209,12 +224,12 @@ client_read_cb(
 
                 if((client->current_record_length & 0x8000) || client->current_record_length == 0) {
                     // Max length is 2^14, can't be 0
-                    client->state = snip_state_error_protocol_violation;
+                    client->state = snip_pair_state_error_protocol_violation;
                     break;
                 }
-                client->state = snip_state_reading_record;
+                client->state = snip_pair_state_reading_record;
                 break;
-            case snip_state_reading_record:
+            case snip_pair_state_reading_record:
                 // libevent is handling the buffering so we'll pull out the whole record at once. Can't be > than 16k
                 offset = client->current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH;
                 if((available_input - offset) < client->current_record_length) {
@@ -242,7 +257,7 @@ client_read_cb(
                     {
                         if(handshake_data[0] != SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_CLIENT_HELLO) {
                             // The first message MUST be a ClientHello
-                            client->state = snip_state_error_protocol_violation;
+                            client->state = snip_pair_state_error_protocol_violation;
                             break;
                         }
                         memcpy(&tmp32, handshake_data, sizeof(uint32_t));
@@ -255,7 +270,7 @@ client_read_cb(
                 available_handshake = snip_get_handshake_buffer_length(client);
                 if(client->current_message_length && (available_handshake >= client->current_message_length)) {
                     // Ok, cool, we've got the whole ClientHello
-                    client->state = snip_state_have_client_hello;
+                    client->state = snip_pair_state_have_client_hello;
                     break;
                 }
 
@@ -275,9 +290,9 @@ client_read_cb(
                                                SNIP_TLS_RECORD_HEADER_LENGTH + client->current_record_length;
                 client->current_record_length = 0;
 
-                client->state = snip_state_record_header;
+                client->state = snip_pair_state_record_header;
                 break;
-            case snip_state_have_client_hello:
+            case snip_pair_state_have_client_hello:
                 // Done reading, just process.
                 handshake_data = snip_get_handshake_buffer(
                         client, input, client->current_message_length, &available_handshake);
@@ -288,27 +303,27 @@ client_read_cb(
 
                 offset += SNIP_TLS_CLIENT_HELLO_RANDOM_LENGTH;
                 if(offset + SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_LENGTH > available_handshake) {
-                    client->state = snip_state_error_protocol_violation;
+                    client->state = snip_pair_state_error_protocol_violation;
                     break;
                 }
                 offset += SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_LENGTH + *(handshake_data + offset);
 
                 // Skip the variable length cipher-suite section
                 if((offset + SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE) > available_handshake) {
-                    client->state = snip_state_error_protocol_violation;
+                    client->state = snip_pair_state_error_protocol_violation;
                     break;
                 }
                 memcpy(&tmp16, handshake_data + offset, SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE);
                 offset += SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE + ntohs(tmp16);
 
                 if((offset + SNIP_TLS_CLIENT_HELLO_COMPRESSION_METHOD_LENGTH_SIZE) > available_handshake) {
-                    client->state = snip_state_error_protocol_violation;
+                    client->state = snip_pair_state_error_protocol_violation;
                     break;
                 }
 
                 offset += handshake_data[offset] + SNIP_TLS_CLIENT_HELLO_COMPRESSION_METHOD_LENGTH_SIZE;
                 if((offset + SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_LENGTH) > available_handshake) {
-                    client->state = snip_state_error_protocol_violation;
+                    client->state = snip_pair_state_error_protocol_violation;
                     break;
                 }
 
@@ -376,31 +391,43 @@ client_read_cb(
                     offset += extension_length;
                 }
                 if(client->sni_hostname_length) {
-                    client->state = snip_state_sni_found;
+                    client->state = snip_pair_state_sni_found;
                 }
                 else {
-                    client->state = snip_state_sni_not_found;
+                    client->state = snip_pair_state_sni_not_found;
                 }
                 break;
-            case snip_state_sni_found:
+            case snip_pair_state_sni_found:
+                // Ok, cool, lets make some progress.
+
                 break;
-            case snip_state_sni_not_found:
+            case snip_pair_state_waiting_for_dns:
                 break;
-            case snip_state_error_not_tls:
+            case snip_pair_state_waiting_for_connect:
+                break;
+            case snip_pair_state_proxying:
+                break;
+            case snip_pair_state_sni_not_found:
+                break;
+            case snip_pair_state_error_dns_failed:
+                break;
+            case snip_pair_state_error_connect_failed:
+                break;
+            case snip_pair_state_error_not_tls:
                 // So it looks like this isn't TLS, or at least isn't a version we know.  It may be that the client
                 // connected with HTTP, in which case we can at least provide a helpful error. Apache does something
                 // similar.
                 buffer = evbuffer_pullup(input, 5);
                 if(!memcmp(buffer, "GET /", 5) || !memcmp(buffer, "POST ", 5) || !memcmp(buffer, "HEAD ", 5)) {
-                    client->state = snip_state_error_found_http;
+                    client->state = snip_pair_state_error_found_http;
                     break;
                 }
                 break;
-            case snip_state_error_protocol_violation:
-            case snip_state_error_invalid_tls_version:
+            case snip_pair_state_error_protocol_violation:
+            case snip_pair_state_error_invalid_tls_version:
                 printf("Error\n");
                 break;
-            case snip_state_error_found_http:
+            case snip_pair_state_error_found_http:
                 break;
 
         }
@@ -532,4 +559,32 @@ snip_start_listening(struct event_base *base, uint16_t port) {
     }
     evconnlistener_set_error_cb(listener, snip_accept_error_cb);
     return listener;
+}
+
+/**
+ * Create the snip_context object.
+ * @return
+ */
+struct snip_context *
+snip_context_create() {
+    struct snip_context *context = malloc(sizeof(struct snip_context));
+    memset(context, '\0', sizeof(struct snip_context));
+    return context;
+}
+
+/**
+ * Initialize the context, with event bases and the like.
+ */
+void
+snip_context_init(struct snip_context *context) {
+    context->event_base = event_base_new();
+    context->dns_base = evdns_base_new(context->event_base, 1);
+}
+
+/**
+ *
+ */
+void snip_reload_config(struct snip_context *context)
+{
+
 }
