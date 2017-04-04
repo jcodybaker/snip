@@ -10,12 +10,7 @@ int main(int argc, char **argv) {
 
     struct snip_context *context = snip_context_create();
     snip_context_init(context, argc, argv);
-
-    context.hup_event = evsignal_new(context.event_base, SIGHUP, snip_reload, NULL);
-
-    snip_start_listening(base, 8080);
-    event_base_dispatch(base);
-
+    snip_run(context);
     return 0;
 }
 

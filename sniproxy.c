@@ -2,6 +2,7 @@
 // Created by Cody Baker on 3/16/17.
 //
 
+#include <event2/thread.h>
 #include <event2/event.h>
 #include <event2/dns.h>
 
@@ -17,17 +18,31 @@
 #include <errno.h>
 #include <sys/socket.h>
 
+#include "config.h"
 #include "compat.h"
 #include "sniproxy.h"
 #include "tls.h"
+
+#include <pthread.h>
+
+const struct timeval snip_shutdown_timeout = {5, 0};
 
 struct snip_context {
     struct snip_config *config;
     struct evdns_base *dns_base;
     struct event_base *event_base;
 
+    pthread_t event_thread;
+    pthread_cond_t work_for_main_thread;
+    pthread_mutex_t context_lock;
+
     struct event *hup_event;
     int pending_reload;
+
+    int argc;
+    char **argv;
+
+    int shutting_down;
 };
 
 
@@ -576,15 +591,75 @@ snip_context_create() {
  * Initialize the context, with event bases and the like.
  */
 void
-snip_context_init(struct snip_context *context) {
+snip_context_init(struct snip_context *context, int argc, char **argv) {
+    context->argc = argc;
+    context->argv = argv;
+    // right now we only support pthreads.  Windows threads are TODO.
+    evthread_use_pthreads();
     context->event_base = event_base_new();
     context->dns_base = evdns_base_new(context->event_base, 1);
+
+}
+
+
+void snip_stop(struct snip_context *context) {
+    context->shutting_down = 1;
+    event_base_loopexit(context->event_base, &snip_shutdown_timeout);
+
+}
+
+void snip_sigint_handler(evutil_socket_t fd, short events, void *arg) {
+    struct snip_context *context = (struct snip_context *) arg;
+    if(context->shutting_down) {
+        snip_stop(context);
+    }
+}
+
+void snip_sighup_handler(evutil_socket_t fd, short events, void *arg) {
+    struct snip_context *context = (struct snip_context *) arg;
+    pthread_mutex_lock(&(context->context_lock));
+    if(!context->pending_reload) {
+        context->pending_reload = 1;
+        pthread_cond_signal(&(context->work_for_main_thread));
+        pthread_mutex_unlock(&(context->context_lock));
+    }
+}
+
+void * snip_run_network(void *ctx)
+{
+    struct snip_context *context = (struct snip_context *) ctx;
+    evsignal_new(context->event_base, SIGHUP, snip_sighup_handler, (void *) context);
+    evsignal_new(context->event_base, SIGINT, snip_sigint_handler, (void *) context);
+    event_base_dispatch(context->event_base);
+    return NULL;
 }
 
 /**
- *
+ * Read the configuration and start handling requests.
+ * @param[in,out] context
  */
-void snip_reload_config(struct snip_context *context)
+void snip_run(struct snip_context *context)
 {
-
+    snip_reload_config(context->event_base, context->argc, context->argv);
+    pthread_cond_init(&(context->work_for_main_thread), NULL);
+    pthread_create(&(context->event_thread), NULL, snip_run_network, (void *) context);
+    pthread_mutex_init(&(context->context_lock), NULL);
+    pthread_mutex_lock(&(context->context_lock));
+    while(1) {
+        pthread_cond_wait(&(context->work_for_main_thread), &(context->context_lock));
+        if(context->shutting_down) {
+            break;
+        }
+        if(context->pending_reload) {
+            context->pending_reload = 0;
+            pthread_mutex_unlock(&(context->context_lock));
+            snip_reload_config(context->event_base, context->argc, context->argv);
+            pthread_mutex_lock(&(context->context_lock));
+        }
+    }
+    pthread_join(context->event_thread, NULL);
+    pthread_mutex_unlock(&(context->context_lock));
+    pthread_mutex_destroy(&(context->context_lock));
+    pthread_cond_destroy(&(context->work_for_main_thread));
 }
+

@@ -44,10 +44,9 @@ void
 snip_context_init(struct snip_context *context, int argc, char **argv);
 
 /**
- *
+ * Read the configuration and start handling requests.
+ * @param[in,out] context
  */
-void snip_reload_config(struct snip_context *context);
-
-
+void snip_run(struct snip_context *context);
 
 #endif //SNIPROXY_SNIPROXY_H

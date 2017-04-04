@@ -39,7 +39,7 @@ struct snip_config_listener_list {
 };
 
 struct snip_config {
-    char *config_path;
+    const char *config_path;
 
     struct snip_config_listener_list *listeners;
 
