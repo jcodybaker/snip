@@ -1,2 +1,11 @@
+# Ignore google-test products.
+Makefile
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+libgtest.a
+libgtest_main.a
+
+
 # python
 *.pyc
