@@ -3,10 +3,14 @@
 listeners:
 - port: 443
   bind: 0.0.0.0
+  routes:
+    - sni_hostname: "www.bing.com"
+      target: "bing.com"
+      target_port: 443
 - port: 8443
   bind: 0.0.0.0
   routes:
     "www.bing.com": "bing.com"
 routes:
   "www.google.com": "google.com"
-  "www.yahoo.com": "yahoo.com"
+  "www.yahoo.com": "yahoo.com:443"

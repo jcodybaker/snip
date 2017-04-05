@@ -70,17 +70,25 @@ void
 snip_reload_config(struct event_base *event_base, int argc, char **argv);
 
 /**
+ * Given a string of digits (ex. "12345") parse it into a port and set *port to the value.  It may NOT be prefaced or
+ *     suffixed by any extra characters, must be a valid 16-bit number, and must only contain digits.
+ * @param port_string A NULL terminated string of at 1 to 5 digits.
+ * @param port Pointer to a uint16_t where the port value should be stored.
+ * @return True if the port is valid and was parsed properly.  False otherwise.
+ */
+int snip_parse_port(const char *port_string, uint16_t *port);
+
+/**
  * Given a string of format "www.example.com:12345", parse the hostname and port, and allocate a new string for the
  * separated hostname.
  *
  * @param target[in] - A target string of the format "www.example.com:12345" or "www.example.com".
- * @param target_length[in] - The length in bytes of the target string.
  * @param hostname[out] - A place where we can store a pointer to the hostname string.
  * @param port[out] - Address where we can store the port.  We set 0 if the port isn't specified.
  * @return true (1) if the parse was successful, false (0) otherwise.
  */
 int
-snip_parse_target(const char *target, size_t target_length, char **hostname, uint16_t *port);
+snip_parse_target(const char *target, char **hostname, uint16_t *port);
 
 #ifdef __cplusplus
 }

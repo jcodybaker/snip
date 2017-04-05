@@ -46,7 +46,7 @@ snip_log_level_to_string(snip_log_level_t level) {
 void snip_vlog(snip_log_level_t level, const char *msg_format, va_list args) {
     fprintf(stderr, "%s: ", snip_log_level_to_string(level));
     vfprintf(stderr, msg_format, args);
-    fputs("", stderr);
+    fputs("\n", stderr);
 }
 
 /**

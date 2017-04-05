@@ -147,8 +147,8 @@ void snip_config_parse_args(struct snip_config *config, int argc, char **argv) {
  */
 void
 snip_log_config(struct snip_config *config, yaml_event_t *event, snip_log_level_t level, const char *msg_format, ...) {
-    const char *config_error_msg = "%s in configuration file '%s' between %d:%d and %d:%d.";
-    size_t buffer_max = 1 + (size_t) evutil_snprintf(NULL,
+    const char *config_error_msg = "%sin configuration file '%s' between %d:%d and %d:%d.";
+    size_t buffer_max = 1 + (size_t) snprintf(NULL,
                                         0,
                                         config_error_msg,
                                         msg_format,
@@ -158,8 +158,8 @@ snip_log_config(struct snip_config *config, yaml_event_t *event, snip_log_level_
                                         event->end_mark.line,
                                         event->end_mark.column);
     char *buffer = malloc(buffer_max);
-    evutil_snprintf(NULL,
-                    0,
+    snprintf(buffer,
+                    buffer_max,
                     config_error_msg,
                     msg_format,
                     config->config_path,
@@ -180,48 +180,57 @@ snip_log_config(struct snip_config *config, yaml_event_t *event, snip_log_level_
 }
 
 /**
+ * Given a string of digits (ex. "12345") parse it into a port and set *port to the value.  It may NOT be prefaced or
+ *     suffixed by any extra characters, must be a valid 16-bit number, and must only contain digits.
+ * @param port_string A NULL terminated string of at 1 to 5 digits.
+ * @param port Pointer to a uint16_t where the port value should be stored.
+ * @return True if the port is valid and was parsed properly.  False otherwise.
+ */
+int snip_parse_port(const char *port_string, uint16_t *port) {
+    const char *port_end = port_string;
+    while(1) {
+        if((port_end - port_string) > 5) {
+            return 0;
+        }
+        if(*port_end == '\0') {
+            break;
+        }
+        if((*port_end < '0') || (*port_end > '9')) {
+            return 0; // Return false if the port contains a non-digit character.
+        }
+        port_end += 1;
+    }
+    if(port_string == port_end) {
+        // A colon was found, but no port was found after it.
+        return 0;
+    }
+    unsigned long port_ul = strtoul(port_string, NULL, 10);
+    if(port_ul > 0xFFFF) { // port must be a 16-bit number.
+        return 0;
+    }
+    *port = (uint16_t) port_ul;
+    return 1;
+}
+
+/**
  * Given a string of format "www.example.com:12345", parse the hostname and port, and allocate a new string for the
  * separated hostname.
  *
  * @param target[in] - A target string of the format "www.example.com:12345" or "www.example.com".
- * @param target_length[in] - The length in bytes of the target string.
  * @param hostname[out] - A place where we can store a pointer to the hostname string.
  * @param port[out] - Address where we can store the port.  We set 0 if the port isn't specified.
  * @return true (1) if the parse was successful, false (0) otherwise.
  */
 int
-snip_parse_target(const char *target, size_t target_length, char **hostname, uint16_t *port) {
+snip_parse_target(const char *target, char **hostname, uint16_t *port) {
     *hostname = NULL;
-    char *colon = strchr(target, ':');
+    const char *colon = strchr(target, ':');
     size_t hostname_length;
     if(colon) {
         hostname_length = colon - target;
-
-        char *port_start = colon + 1;
-        char *port_end = port_start;
-
-        while(1) {
-            if((port_end - port_start) > 5) {
-                return 0;
-            }
-            if(*port_end == '\0') {
-                break;
-            }
-            if((*port_end < '0') || (*port_end > '9')) {
-                return 0; // Return false if the port contains a non-digit character.
-            }
-            port_end += 1;
-        }
-        if(port_start == port_end) {
-            // A colon was found, but no port was found after it.
+        if(!snip_parse_port(colon + 1, port)) {
             return 0;
         }
-        unsigned long port_ul = strtoul(port_start, NULL, 10);
-        if(port_ul > 0xFFFF) { // port must be a 16-bit number.
-            return 0;
-        }
-        *port = (uint16_t) port_ul;
-
         *hostname = malloc(hostname_length + 1);
         memset(*hostname, '\0', hostname_length + 1);
         memcpy(*hostname, target, hostname_length);
@@ -272,8 +281,16 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
         snip_config_parse_state_initial = 0,
         snip_config_parse_state_root_map,
 
+        snip_config_parse_state_listener_port_rvalue,
+        snip_config_parse_state_listener_bind_rvalue,
         snip_config_parse_state_routes_rvalue,
+
         snip_config_parse_state_routes_list,
+        snip_config_parse_state_routes_list_map,
+        snip_config_parse_state_routes_list_map_sni_hostname_value,
+        snip_config_parse_state_routes_list_map_target_value,
+        snip_config_parse_state_routes_list_map_target_port_value,
+
         snip_config_parse_state_routes_map,
         snip_config_parse_state_routes_map_value,
 
@@ -281,21 +298,38 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
         // Right now we always treat these as fatal errors, but we might change the behavior for SIGHUP config reloads.
         snip_config_parse_state_error,
 
-        snip_config_parse_state_listener_rvalue,
-        snip_config_parse_state_listener_in_list,
-        snip_config_parse_state_listener_item_map
+        snip_config_parse_state_listeners_rvalue,
+        snip_config_parse_state_listeners_in_list,
+        snip_config_parse_state_listener_item_map,
+
+        snip_config_parse_success
     } snip_config_parse_state_t;
     
     snip_config_parse_state_t state = snip_config_parse_state_initial;
-    snip_config_parse_state_t state_after_skip;
+    snip_config_parse_state_t state_after_skip = snip_config_parse_state_initial;
 
     struct snip_config_listener_list *current_listener_item = NULL;
     struct snip_config_route_list *current_route_item = NULL;
 
+    // We skip unknown keys (though we do warn).  If the associated value is a map or sequence we need to discard
+    // all children until we complete that value.
+    int current_depth = 0;
+    int skip_rvalue_depth = 0; // This gets set when we enter the skip state.
+    if(event.type == YAML_SEQUENCE_START_EVENT || event.type == YAML_MAPPING_START_EVENT) {
+        current_depth += 1;
+    }
+    else if (event.type == YAML_SEQUENCE_END_EVENT || event.type == YAML_MAPPING_END_EVENT) {
+        current_depth -= 1;
+    }
+
     while(1) {
+        if (!yaml_parser_parse(&parser, &event)) {
+            snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Error parsing ");
+        }
+
         switch(event.type) {
             case YAML_NO_EVENT:
-                printf("YAML_NO_EVENT\n");
+                //printf("YAML_NO_EVENT\n");
                 break;
             case YAML_STREAM_START_EVENT:
                 printf("YAML_STREAM_START_EVENT - %d\n", event.data.stream_start.encoding);
@@ -336,19 +370,9 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
                 return;
         }
 
-        // We skip unknown keys (though we do warn).  If the associated value is a map or sequence we need to discard
-        // all children until we complete that value.
-        int current_depth = 0;
-        int skip_rvalue_depth = 0; // This gets set when we enter the skip state.
-        if(event.type == YAML_SEQUENCE_START_EVENT || event.type == YAML_MAPPING_START_EVENT) {
-            current_depth += 1;
-        }
-        else if (event.type == YAML_SEQUENCE_END_EVENT || event.type == YAML_MAPPING_END_EVENT) {
-            current_depth -= 1;
-        }
-
         if(state == snip_config_parse_state_initial)
         {
+            // New document. Make sure it starts with a map, but otherwise, nothing fancy.
             if(event.type == YAML_MAPPING_START_EVENT) {
                 state = snip_config_parse_state_root_map;
             }
@@ -361,15 +385,19 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
             }
         }
         else if(state == snip_config_parse_state_root_map) {
+            // We're parsing a new key in the root dictionary of the configuration file.
             if(event.type == YAML_SCALAR_EVENT) {
                 if(!strcmp((const char *) event.data.scalar.value, "listeners")) {
-                    state = snip_config_parse_state_listener_rvalue;
+                    state = snip_config_parse_state_listeners_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "routes")) {
+                    state = snip_config_parse_state_routes_rvalue;
                 }
                 else {
                     // We don't recognize this key. We log it as a warning, and make plans to skip the associated value.
+                    state_after_skip = state;
                     state = snip_config_parse_state_skipping_unexpected_key_value;
                     skip_rvalue_depth = current_depth;
-                    state_after_skip = state;
                     snip_log_config(config,
                                     &event,
                                     SNIPROXY_LOG_LEVEL_WARNING,
@@ -378,21 +406,26 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
                     );
                 }
             }
+            else if(event.type == YAML_MAPPING_END_EVENT) {
+                state = snip_config_parse_success;
+            }
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Key had unexpected type ");
                 state = snip_config_parse_state_error;
             }
         }
-        else if(state == snip_config_parse_state_listener_rvalue) {
+        else if(state == snip_config_parse_state_listeners_rvalue) {
+            // We're in root dictionary, and we have the key "listeners".  The value MUST be a list.
             if(event.type == YAML_SEQUENCE_START_EVENT) {
-                state = snip_config_parse_state_listener_in_list;
+                state = snip_config_parse_state_listeners_in_list;
             }
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "'listeners' section was not a list ");
                 state = snip_config_parse_state_error;
             }
         }
-        else if(state == snip_config_parse_state_listener_in_list) {
+        else if(state == snip_config_parse_state_listeners_in_list) {
+            // We're in the list of listeners, ready to start parsing the next listener. That listener must be a map.
             if(event.type == YAML_MAPPING_START_EVENT) {
                 // Ok, time to create a new listener.
                 current_listener_item = snip_config_listener_list_create();
@@ -411,6 +444,10 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
 
                 state = snip_config_parse_state_listener_item_map;
             }
+            else if(event.type == YAML_SEQUENCE_END_EVENT) {
+                current_listener_item = NULL;
+                state = snip_config_parse_state_root_map;
+            }
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
@@ -420,15 +457,22 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
             }
         }
         else if(state == snip_config_parse_state_listener_item_map) {
+            // We are now parsing a specific listener, and are ready to examine a key.
             if(event.type == YAML_SCALAR_EVENT) {
                 if(!strcmp((const char *) event.data.scalar.value, "routes")) {
                     state = snip_config_parse_state_routes_rvalue;
                 }
+                else if(!strcmp((const char *) event.data.scalar.value, "port")) {
+                    state = snip_config_parse_state_listener_port_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "bind")) {
+                    state = snip_config_parse_state_listener_bind_rvalue;
+                }
                 else {
                     // We don't recognize this key. We log it as a warning, and make plans to skip the associated value.
+                    state_after_skip = state;
                     state = snip_config_parse_state_skipping_unexpected_key_value;
                     skip_rvalue_depth = current_depth;
-                    state_after_skip = state;
                     snip_log_config(config,
                                     &event,
                                     SNIPROXY_LOG_LEVEL_WARNING,
@@ -436,6 +480,9 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
                                     event.data.scalar.value
                     );
                 }
+            }
+            else if(event.type == YAML_MAPPING_END_EVENT) {
+                state = snip_config_parse_state_listeners_in_list;
             }
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
@@ -446,6 +493,9 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
             }
         }
         else if(state == snip_config_parse_state_routes_rvalue) {
+            // The "routes" key is valid in both the root (as a global default) and within listener config objects.
+            // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
+            // shortcut dictionary format.  We figure out which format we have here.
             if(event.type == YAML_MAPPING_START_EVENT) {
                 state = snip_config_parse_state_routes_map;
             }
@@ -461,12 +511,37 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
             }
         }
         else if(state == snip_config_parse_state_routes_map) {
-            // This is a shortcut for routes. The key is the pattern, the value the destination.
+            // We're inside the value of a 'routes' configuration.  These routes are defined with the shortcut
+            // dictionary format. The key is the pattern, the value the destination.  We're going to examine the key,
+            // which should be the SNI-hostname-pattern we're trying to match.  We might also get an event indicating
+            // the end of the list.
             if(event.type == YAML_SCALAR_EVENT) {
                 state = snip_config_parse_state_routes_map_value;
                 current_route_item = snip_config_route_list_create();
+
+                // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
+                struct snip_config_route_list **routes_first = current_listener_item ?
+                                                               &(current_listener_item->value.routes) :
+                                                               &(config->routes);
+                if(!(*(routes_first))) {
+                    *(routes_first) = current_route_item;
+                }
+                else {
+                    // skip to the end and add it there.
+                    struct snip_config_route_list *route_item = *(routes_first);
+                    while(route_item->next) {
+                        route_item = route_item->next;
+                    }
+                    route_item->next = current_route_item;
+                }
                 current_route_item->value.sni_hostname = malloc(event.data.scalar.length);
                 memcpy(current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
+            }
+            else if(event.type == YAML_MAPPING_END_EVENT) {
+                // End of the dictionary.
+                current_route_item = NULL;
+                state = current_listener_item ?
+                        snip_config_parse_state_listener_item_map : snip_config_parse_state_root_map;
             }
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
@@ -477,25 +552,179 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
             }
         }
         else if(state == snip_config_parse_state_routes_map_value) {
-            // This is a shortcut for routes. The key is the pattern, the value the destination.
+            // We're in the shortcut dictionary version of a routes section.  We have the SNI-hostname key, and are now
+            // looking at the value.  It must be a string.
             if(event.type == YAML_SCALAR_EVENT) {
                 state = snip_config_parse_state_routes_map;
-
-
-
-                current_route_item->value.sni_hostname = malloc(event.data.scalar.length);
-                memcpy(current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
+                snip_parse_target((const char *) event.data.scalar.value,
+                                  &(current_route_item->value.dest_hostname),
+                                  &(current_route_item->value.port));
             }
             else if(event.type != YAML_NO_EVENT) {
-                snip_log_config(config,
-                                &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
-                                "The 'routes' section must be a list or dictionary ");
+                snip_log_config(
+                        config,
+                        &event,
+                        SNIPROXY_LOG_LEVEL_FATAL,
+                        "The 'routes' section must either be a string:string dictionary, or a list of dictionaries ");
                 state = snip_config_parse_state_error;
             }
         }
         else if(state == snip_config_parse_state_routes_list) {
+            // We're currently parsing a 'routes' section which is defined in the more verbose list-of-dictionaries
+            // format.  We expect to find either the start of a new dictionary, or an end-of-list event.
+            if(event.type == YAML_MAPPING_START_EVENT) {
+                state = snip_config_parse_state_routes_list_map;
+                current_route_item = snip_config_route_list_create();
 
+                // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
+                struct snip_config_route_list **routes_first = current_listener_item ?
+                                                               &(current_listener_item->value.routes) :
+                                                               &(config->routes);
+                if(!(*(routes_first))) {
+                    *(routes_first) = current_route_item;
+                }
+                else {
+                    // skip to the end and add it there.
+                    struct snip_config_route_list *route_item = *(routes_first);
+                    while(route_item->next) {
+                        route_item = route_item->next;
+                    }
+                    route_item->next = current_route_item;
+                }
+            }
+            else if(event.type == YAML_SEQUENCE_END_EVENT) {
+                // End of the list.  If we were examining a listener, go back to parsing it, otherwise goto the root.
+                state = current_listener_item ?
+                        snip_config_parse_state_listener_item_map : snip_config_parse_state_root_map;
+            }
+            else if(event.type != YAML_NO_EVENT) {
+                snip_log_config(
+                        config,
+                        &event,
+                        SNIPROXY_LOG_LEVEL_FATAL,
+                        "The 'routes' section must either be a string:string dictionary, or a list of dictionaries ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if(state == snip_config_parse_state_routes_list_map) {
+            // We're inside a route-definition that uses the more verbose list-of-dictionary format.  We're in that
+            // dictionary looking at the key.
+            if(event.type == YAML_SCALAR_EVENT) {
+                if(!strcmp((const char *) event.data.scalar.value, "sni_hostname")) {
+                    state = snip_config_parse_state_routes_list_map_sni_hostname_value;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "target")) {
+                    state = snip_config_parse_state_routes_list_map_target_value;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "target_port")) {
+                    state = snip_config_parse_state_routes_list_map_target_port_value;
+                }
+                else {
+                    // We don't recognize this key. We log it as a warning, and make plans to skip the associated value.
+                    state_after_skip = state;
+                    state = snip_config_parse_state_skipping_unexpected_key_value;
+                    skip_rvalue_depth = current_depth;
+                    snip_log_config(config,
+                                    &event,
+                                    SNIPROXY_LOG_LEVEL_WARNING,
+                                    "Unexpected key '%s' ",
+                                    event.data.scalar.value
+                    );
+                }
+            }
+            else if(event.type == YAML_MAPPING_END_EVENT) {
+                state = snip_config_parse_state_routes_list;
+            }
+            else if(event.type != YAML_NO_EVENT) {
+                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Key had unexpected type ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if (state == snip_config_parse_state_routes_list_map_sni_hostname_value) {
+            if(event.type == YAML_SCALAR_EVENT) {
+                current_route_item->value.sni_hostname = malloc(event.data.scalar.length);
+                memcpy(current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
+                state = snip_config_parse_state_routes_list_map;
+            }
+            else if (event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIPROXY_LOG_LEVEL_FATAL,
+                                "Route property 'sni_hostname' expects a string value ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if (state == snip_config_parse_state_routes_list_map_target_value) {
+            if(event.type == YAML_SCALAR_EVENT) {
+                current_route_item->value.dest_hostname = malloc(event.data.scalar.length);
+                memcpy(current_route_item->value.dest_hostname, event.data.scalar.value, event.data.scalar.length);
+                state = snip_config_parse_state_routes_list_map;
+            }
+            else if (event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIPROXY_LOG_LEVEL_FATAL,
+                                "Route property 'target' expects a string value ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if (state == snip_config_parse_state_routes_list_map_target_port_value) {
+            if(event.type == YAML_SCALAR_EVENT) {
+                if(!snip_parse_port((const char *) event.data.scalar.value, &(current_route_item->value.port))) {
+                    snip_log_config(config,
+                                    &event,
+                                    SNIPROXY_LOG_LEVEL_FATAL,
+                                    "Invalid port specification '%s' for route ",
+                                    event.data.scalar.value);
+                    state = snip_config_parse_state_error;
+                }
+                else {
+                    state = snip_config_parse_state_routes_list_map;
+                }
+            }
+            else if (event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIPROXY_LOG_LEVEL_FATAL,
+                                "Route property 'target_port' expects an integer between 0 and 65535 ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if(state == snip_config_parse_state_listener_port_rvalue) {
+            if(event.type == YAML_SCALAR_EVENT) {
+                if(!snip_parse_port((const char *) event.data.scalar.value, &(current_listener_item->value.bind_port))) {
+                    snip_log_config(config,
+                                    &event,
+                                    SNIPROXY_LOG_LEVEL_FATAL,
+                                    "Invalid port specification '%s' for route ",
+                                    event.data.scalar.value);
+                    state = snip_config_parse_state_error;
+                }
+                else {
+                    state = snip_config_parse_state_listener_item_map;
+                }
+            }
+            else if (event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIPROXY_LOG_LEVEL_FATAL,
+                                "'listener' property 'port' expects an integer between 0 and 65535 ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if(state == snip_config_parse_state_listener_bind_rvalue) {
+            if(event.type == YAML_SCALAR_EVENT) {
+                current_listener_item->value.bind_addr = malloc(event.data.scalar.length);
+                memcpy(current_listener_item->value.bind_addr, event.data.scalar.value, event.data.scalar.length);
+                state = snip_config_parse_state_listener_item_map;
+            }
+            else if (event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIPROXY_LOG_LEVEL_FATAL,
+                                "'listener' property 'bind' expects a string value ");
+                state = snip_config_parse_state_error;
+            }
         }
         else if(state == snip_config_parse_state_skipping_unexpected_key_value) {
             if((current_depth == skip_rvalue_depth) &&
@@ -507,7 +736,6 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
                 state = state_after_skip;
             }
         }
-
         yaml_event_delete(&event);
     }
     yaml_parser_delete(&parser);
