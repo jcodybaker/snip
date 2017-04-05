@@ -13,4 +13,12 @@
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #endif
 
+#ifndef TRUE
+#define TRUE 1
+#endif
+
+#ifndef FALSE
+#define FALSE 0
+#endif
+
 #endif //SNIPROXY_COMPAT_H

@@ -119,7 +119,6 @@ void snip_config_parse_args(struct snip_config *config, int argc, char **argv) {
 
     do {
         rv = getopt_long(argc, argv, "c:h", arguments, &index);
-        const struct option *found = arguments + index;
         switch(rv) {
             case 'c':
                 config->config_path = optarg;
@@ -247,27 +246,14 @@ snip_parse_target(const char *target, char **hostname, uint16_t *port) {
 
 
 /**
- * Reload the configuration file asynchronously.
- * @param event_base
- * @param argc - argument count from the command line.  If this is being built into another package, this can be 0
- *      provided the default config location is sufficient.
- * @param argv - argument strings from the command line.  If this is being build into another package, this can be NULL
- *      provided the default config location is sufficient.
+ * Read the configuration file and apply it to the specified config structure.
  */
-void
-snip_reload_config(struct event_base *event_base, int argc, char **argv) {
-    struct snip_config *config = snip_config_create();
-    if(argc && argv) {
-        snip_config_parse_args(config, argc, argv);
-    }
-    if(!config->config_path) {
-        config->config_path = SNIP_INSTALL_CONF_PATH;
-    }
-
+int
+snip_parse_config_file(struct snip_config *config) {
     FILE *config_file = fopen(config->config_path, "r");
     if(!config_file) {
         snip_log_fatal(SNIPROXY_EXIT_ERROR_INVALID_CONFIG, "Could not read config file '%s'.", config->config_path);
-        return;
+        return 0;
     }
 
     yaml_parser_t parser;
@@ -326,7 +312,7 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
         if (!yaml_parser_parse(&parser, &event)) {
             snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Error parsing ");
         }
-
+        /*
         switch(event.type) {
             case YAML_NO_EVENT:
                 //printf("YAML_NO_EVENT\n");
@@ -364,13 +350,21 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
                 break;
             case YAML_DOCUMENT_END_EVENT:
                 printf("YAML_DOCUMENT_END_EVENT\n");
-                return;
+                break;
             case YAML_STREAM_END_EVENT:
                 printf("YAML_STREAM_END_EVENT\n");
-                return;
+                break;
         }
+        */
 
-        if(state == snip_config_parse_state_initial)
+
+        if(event.type == YAML_STREAM_END_EVENT) {
+            if(state != snip_config_parse_success) {
+                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Unexpected end of configuration ");
+            }
+            break;
+        }
+        else if(state == snip_config_parse_state_initial)
         {
             // New document. Make sure it starts with a map, but otherwise, nothing fancy.
             if(event.type == YAML_MAPPING_START_EVENT) {
@@ -736,16 +730,36 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
                 state = state_after_skip;
             }
         }
+        else if(state == snip_config_parse_success) {
+            if(event.type != YAML_DOCUMENT_END_EVENT && event.type != YAML_NO_EVENT) {
+                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Unexpected content after configuration ");
+            }
+        }
         yaml_event_delete(&event);
     }
     yaml_parser_delete(&parser);
 
+    return 1;
+}
 
-
-    config->listeners = snip_config_listener_list_create();
-    struct snip_config_listener *fake_listener = &(config->listeners->value);
-    fake_listener->bind_port = 8080;
-
+/**
+ * Reload the configuration file asynchronously.
+ * @param event_base
+ * @param argc - argument count from the command line.  If this is being built into another package, this can be 0
+ *      provided the default config location is sufficient.
+ * @param argv - argument strings from the command line.  If this is being build into another package, this can be NULL
+ *      provided the default config location is sufficient.
+ */
+void
+snip_reload_config(struct event_base *event_base, int argc, char **argv) {
+    struct snip_config *config = snip_config_create();
+    if(argc && argv) {
+        snip_config_parse_args(config, argc, argv);
+    }
+    if(!config->config_path) {
+        config->config_path = SNIP_INSTALL_CONF_PATH;
+    }
+    snip_parse_config_file(config);
     //int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
     //int evdns_base_resume(struct evdns_base *base);
 }

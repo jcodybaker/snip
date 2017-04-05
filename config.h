@@ -49,6 +49,8 @@ struct snip_config {
     struct snip_config_route *default_route;
 };
 
+struct snip_config *
+snip_config_create();
 
 /**
  * Maps the SNI hostname into a destination hostname based upon configuration.
@@ -68,6 +70,12 @@ snip_get_target_hostname_from_sni_hostname(char *sni_hostname);
  */
 void
 snip_reload_config(struct event_base *event_base, int argc, char **argv);
+
+/**
+ * Read the configuration file and apply it to the specified config structure.
+ */
+int
+snip_parse_config_file(struct snip_config *config);
 
 /**
  * Given a string of digits (ex. "12345") parse it into a port and set *port to the value.  It may NOT be prefaced or

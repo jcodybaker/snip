@@ -6,5 +6,9 @@ include_directories(${gtest_SOURCE_DIR}/include ${gtest_SOURCE_DIR})
 
 add_executable(runConfigTest test-config.cpp)
 
+target_compile_definitions(runConfigTest
+        PUBLIC SNIP_TEST_CONFIGS="${CMAKE_CURRENT_SOURCE_DIR}/configs"
+        )
+
 target_link_libraries(runConfigTest gtest gtest_main)
 target_link_libraries(runConfigTest sniproxy_lib)
