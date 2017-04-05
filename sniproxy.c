@@ -25,6 +25,7 @@
 
 #include <pthread.h>
 
+
 const struct timeval snip_shutdown_timeout = {5, 0};
 
 struct snip_context {

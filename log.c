@@ -5,6 +5,7 @@
 #include "log.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdarg.h>
 
 /**
  * Convert a snip_log_level_t to a string describing the severity level.

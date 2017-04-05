@@ -7,6 +7,10 @@
 
 #include <stdio.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define SNIPROXY_EXIT_ERROR_GENERAL 1
 #define SNIPROXY_EXIT_ERROR_INVALID_CONFIG 64
 
@@ -76,5 +80,8 @@ void snip_log_fatal(int code, const char *msg_format, ...);
  */
 void snip_vlog_fatal(int code, const char *msg_format, va_list args);
 
+#ifdef __cplusplus
+}
+#endif
 
 #endif //SNIPROXY_LOG_H

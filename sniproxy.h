@@ -19,6 +19,11 @@
 #include <errno.h>
 #include <sys/socket.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 struct snip_context;
 
 /**
@@ -48,5 +53,9 @@ snip_context_init(struct snip_context *context, int argc, char **argv);
  * @param[in,out] context
  */
 void snip_run(struct snip_context *context);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif //SNIPROXY_SNIPROXY_H
