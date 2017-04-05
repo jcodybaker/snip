@@ -1066,7 +1066,7 @@ If you try to build Google Test's Xcode project with Xcode 4.0 or later, you may
 If you cannot find the answer to your question in this FAQ, there are
 some other resources you can use:
 
-  1. read other [wiki pages](../docs),
+  1. read other [wiki pages](),
   1. search the mailing list [archive](https://groups.google.com/forum/#!forum/googletestframework),
   1. ask it on [googletestframework@googlegroups.com](mailto:googletestframework@googlegroups.com) and someone will answer it (to prevent spam, we require you to join the [discussion group](http://groups.google.com/group/googletestframework) before you can post.).
 
