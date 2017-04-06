@@ -21,4 +21,8 @@
 #define FALSE 0
 #endif
 
+#ifndef SNIPROXY_BOOLEAN
+#define SNIPROXY_BOOLEAN int
+#endif
+
 #endif //SNIPROXY_COMPAT_H

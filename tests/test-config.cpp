@@ -86,13 +86,13 @@ TEST(ConfigTest, snip_parse_port_test_port_extra_middle) {
  *
  */
 TEST(ConfigTest, snip_parse_config_test) {
-    struct snip_config *config = snip_config_create();
+    snip_config_t *config = snip_config_create();
     config->config_path = SNIP_TEST_CONFIGS "/example.yml";
     EXPECT_TRUE(snip_parse_config_file(config));
     EXPECT_TRUE(config->routes);
     EXPECT_TRUE(config->listeners);
     int listeners = 0;
-    struct snip_config_listener_list *listener_item = config->listeners;
+    snip_config_listener_list_t *listener_item = config->listeners;
     while(listener_item) {
         listeners += 1;
         listener_item = listener_item->next;
@@ -101,13 +101,13 @@ TEST(ConfigTest, snip_parse_config_test) {
 }
 
 TEST(ConfigTest, snip_parse_config_test_json) {
-    struct snip_config *config = snip_config_create();
+    snip_config_t *config = snip_config_create();
     config->config_path = SNIP_TEST_CONFIGS "/example.json";
     EXPECT_TRUE(snip_parse_config_file(config));
     EXPECT_TRUE(config->routes);
     EXPECT_TRUE(config->listeners);
     int listeners = 0;
-    struct snip_config_listener_list *listener_item = config->listeners;
+    snip_config_listener_list_t *listener_item = config->listeners;
     while(listener_item) {
         listeners += 1;
         listener_item = listener_item->next;
@@ -116,13 +116,13 @@ TEST(ConfigTest, snip_parse_config_test_json) {
 }
 
 TEST(ConfigTest, snip_parse_config_test_extra_keys) {
-    struct snip_config *config = snip_config_create();
+    snip_config_t *config = snip_config_create();
     config->config_path = SNIP_TEST_CONFIGS "/extra_keys.yml";
     EXPECT_TRUE(snip_parse_config_file(config));
     EXPECT_TRUE(config->routes);
     EXPECT_TRUE(config->listeners);
     int listeners = 0;
-    struct snip_config_listener_list *listener_item = config->listeners;
+    snip_config_listener_list_t *listener_item = config->listeners;
     while(listener_item) {
         listeners += 1;
         listener_item = listener_item->next;

@@ -7,38 +7,37 @@
 
 #include <string.h>
 #include <stdlib.h>
-#include <stdio.h>
 #include <getopt.h>
-#include <pthread.h>
 #include <yaml.h>
-#include <event2/util.h>
 
-
-char *
-snip_get_target_hostname_from_sni_hostname(char *sni_hostname) {
-    return "www.google.com";
-}
-
-struct snip_config *
+/**
+ * Create a snip_config_t object.
+ * @return
+ */
+snip_config_t *
 snip_config_create() {
-    struct snip_config *config = malloc(sizeof(struct snip_config));
-    memset(config, '\0', sizeof(struct snip_config));
+    snip_config_t *config = malloc(sizeof(snip_config_t));
+    memset(config, '\0', sizeof(snip_config_t));
     return config;
 }
 
-struct snip_config_listener_list *
+/**
+ * Create a listener linked-list item.
+ * @return
+ */
+snip_config_listener_list_t *
 snip_config_listener_list_create() {
-    struct snip_config_listener_list *list = malloc(sizeof(struct snip_config_listener_list));
-    memset(list, '\0', sizeof(struct snip_config_listener_list));
+    snip_config_listener_list_t *list = malloc(sizeof(snip_config_listener_list_t));
+    memset(list, '\0', sizeof(snip_config_listener_list_t));
     return list;
 }
 
 /**
  * Recursively destroy a list of snip_config_listeners.
- * @param list
+ * @param list[in,out]
  */
 void
-snip_config_listener_list_destroy(struct snip_config_listener_list *list) {
+snip_config_listener_list_destroy(snip_config_listener_list_t *list) {
     if(list->next) {
         snip_config_listener_list_destroy(list->next);
     }
@@ -47,21 +46,21 @@ snip_config_listener_list_destroy(struct snip_config_listener_list *list) {
 
 /**
  * Allocate and initialize a new snip_config_route object.
- * @return The new struct snip_config_route_list *
+ * @return The new snip_config_route_list_t *
  */
-struct snip_config_route_list *
+snip_config_route_list_t *
 snip_config_route_list_create() {
-    struct snip_config_route_list *route_list = malloc(sizeof(struct snip_config_route_list));
-    memset(route_list, '\0', sizeof(struct snip_config_route_list));
+    snip_config_route_list_t *route_list = malloc(sizeof(snip_config_route_list_t));
+    memset(route_list, '\0', sizeof(snip_config_route_list_t));
     return route_list;
 }
 
 /**
- * Cleanup and free a struct snip_config_route_list object.
- * @param route_list
+ * Cleanup and free a snip_config_route_list_t object.
+ * @param route_list[in,out]
  */
 void
-snip_config_route_list_destroy(struct snip_config_route_list *route_list) {
+snip_config_route_list_destroy(snip_config_route_list_t *route_list) {
     if(route_list->next) {
         snip_config_route_list_destroy(route_list->next);
     }
@@ -72,9 +71,10 @@ snip_config_route_list_destroy(struct snip_config_route_list *route_list) {
 
 /**
  * Display the help information and exit the application.
- * @param name - The name of the command.
+ * @param name[in] - The name of the command.
  */
-void snip_config_display_help_and_exit(const char *name) {
+void
+snip_config_display_help_and_exit(const char *name) {
     const char *better_name = strrchr(name, '/') == NULL ? name : strrchr(name, '/') + 1;
     printf(
             "snip - TLS SNI Proxy v%s\n"
@@ -93,7 +93,14 @@ void snip_config_display_help_and_exit(const char *name) {
     exit(0);
 }
 
-void snip_config_parse_args(struct snip_config *config, int argc, char **argv) {
+/**
+ * Parse the command line arguments and drop them into a configuration.
+ * @param config[in,out]
+ * @param argc[in]
+ * @param argv[in]
+ */
+void
+snip_config_parse_args(snip_config_t *config, int argc, char **argv) {
     int index = 0;
     int rv = 0;
     const struct option arguments[] = {
@@ -145,7 +152,7 @@ void snip_config_parse_args(struct snip_config *config, int argc, char **argv) {
  * @param ... - List of arguments for populating the format string msg_format.
  */
 void
-snip_log_config(struct snip_config *config, yaml_event_t *event, snip_log_level_t level, const char *msg_format, ...) {
+snip_log_config(snip_config_t *config, yaml_event_t *event, snip_log_level_t level, const char *msg_format, ...) {
     const char *config_error_msg = "%sin configuration file '%s' between %d:%d and %d:%d.";
     size_t buffer_max = 1 + (size_t) snprintf(NULL,
                                         0,
@@ -179,13 +186,14 @@ snip_log_config(struct snip_config *config, yaml_event_t *event, snip_log_level_
 }
 
 /**
- * Given a string of digits (ex. "12345") parse it into a port and set *port to the value.  It may NOT be prefaced or
- *     suffixed by any extra characters, must be a valid 16-bit number, and must only contain digits.
- * @param port_string A NULL terminated string of at 1 to 5 digits.
- * @param port Pointer to a uint16_t where the port value should be stored.
- * @return True if the port is valid and was parsed properly.  False otherwise.
- */
-int snip_parse_port(const char *port_string, uint16_t *port) {
+* Given a string of digits (ex. "12345") parse it into a port and set *port to the value.  It may NOT be prefaced or
+*     suffixed by any extra characters, must be a valid 16-bit number, and must only contain digits.
+* @param port_string[in] A NULL terminated string of at 1 to 5 digits.
+* @param port[out] Pointer to a uint16_t where the port value should be stored.
+* @return True if the port is valid and was parsed properly.  False otherwise.
+*/
+SNIPROXY_BOOLEAN
+snip_parse_port(const char *port_string, uint16_t *port) {
     const char *port_end = port_string;
     while(1) {
         if((port_end - port_string) > 5) {
@@ -220,7 +228,7 @@ int snip_parse_port(const char *port_string, uint16_t *port) {
  * @param port[out] - Address where we can store the port.  We set 0 if the port isn't specified.
  * @return true (1) if the parse was successful, false (0) otherwise.
  */
-int
+SNIPROXY_BOOLEAN
 snip_parse_target(const char *target, char **hostname, uint16_t *port) {
     *hostname = NULL;
     const char *colon = strchr(target, ':');
@@ -247,9 +255,10 @@ snip_parse_target(const char *target, char **hostname, uint16_t *port) {
 
 /**
  * Read the configuration file and apply it to the specified config structure.
+ * @param config[in,out]
  */
-int
-snip_parse_config_file(struct snip_config *config) {
+SNIPROXY_BOOLEAN
+snip_parse_config_file(snip_config_t *config) {
     FILE *config_file = fopen(config->config_path, "r");
     if(!config_file) {
         snip_log_fatal(SNIPROXY_EXIT_ERROR_INVALID_CONFIG, "Could not read config file '%s'.", config->config_path);
@@ -294,8 +303,8 @@ snip_parse_config_file(struct snip_config *config) {
     snip_config_parse_state_t state = snip_config_parse_state_initial;
     snip_config_parse_state_t state_after_skip = snip_config_parse_state_initial;
 
-    struct snip_config_listener_list *current_listener_item = NULL;
-    struct snip_config_route_list *current_route_item = NULL;
+    snip_config_listener_list_t *current_listener_item = NULL;
+    snip_config_route_list_t *current_route_item = NULL;
 
     // We skip unknown keys (though we do warn).  If the associated value is a map or sequence we need to discard
     // all children until we complete that value.
@@ -428,7 +437,7 @@ snip_parse_config_file(struct snip_config *config) {
                 }
                 else {
                     // We want the new listener at the end;
-                    struct snip_config_listener_list *listener_item = config->listeners;
+                    snip_config_listener_list_t *listener_item = config->listeners;
 
                     while(listener_item->next) {
                         listener_item = listener_item->next;
@@ -514,7 +523,7 @@ snip_parse_config_file(struct snip_config *config) {
                 current_route_item = snip_config_route_list_create();
 
                 // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
-                struct snip_config_route_list **routes_first = current_listener_item ?
+                snip_config_route_list_t **routes_first = current_listener_item ?
                                                                &(current_listener_item->value.routes) :
                                                                &(config->routes);
                 if(!(*(routes_first))) {
@@ -522,7 +531,7 @@ snip_parse_config_file(struct snip_config *config) {
                 }
                 else {
                     // skip to the end and add it there.
-                    struct snip_config_route_list *route_item = *(routes_first);
+                    snip_config_route_list_t *route_item = *(routes_first);
                     while(route_item->next) {
                         route_item = route_item->next;
                     }
@@ -571,7 +580,7 @@ snip_parse_config_file(struct snip_config *config) {
                 current_route_item = snip_config_route_list_create();
 
                 // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
-                struct snip_config_route_list **routes_first = current_listener_item ?
+                snip_config_route_list_t **routes_first = current_listener_item ?
                                                                &(current_listener_item->value.routes) :
                                                                &(config->routes);
                 if(!(*(routes_first))) {
@@ -579,7 +588,7 @@ snip_parse_config_file(struct snip_config *config) {
                 }
                 else {
                     // skip to the end and add it there.
-                    struct snip_config_route_list *route_item = *(routes_first);
+                    snip_config_route_list_t *route_item = *(routes_first);
                     while(route_item->next) {
                         route_item = route_item->next;
                     }
@@ -686,7 +695,8 @@ snip_parse_config_file(struct snip_config *config) {
         }
         else if(state == snip_config_parse_state_listener_port_rvalue) {
             if(event.type == YAML_SCALAR_EVENT) {
-                if(!snip_parse_port((const char *) event.data.scalar.value, &(current_listener_item->value.bind_port))) {
+                if(!snip_parse_port((const char *) event.data.scalar.value, &(current_listener_item->value.bind_port)))
+                {
                     snip_log_config(config,
                                     &event,
                                     SNIPROXY_LOG_LEVEL_FATAL,
@@ -752,7 +762,7 @@ snip_parse_config_file(struct snip_config *config) {
  */
 void
 snip_reload_config(struct event_base *event_base, int argc, char **argv) {
-    struct snip_config *config = snip_config_create();
+    snip_config_t *config = snip_config_create();
     if(argc && argv) {
         snip_config_parse_args(config, argc, argv);
     }

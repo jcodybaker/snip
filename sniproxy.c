@@ -28,8 +28,8 @@
 
 const struct timeval snip_shutdown_timeout = {5, 0};
 
-struct snip_context {
-    struct snip_config *config;
+typedef struct snip_context_e {
+    snip_config_t *config;
     struct evdns_base *dns_base;
     struct event_base *event_base;
 
@@ -44,7 +44,7 @@ struct snip_context {
     char **argv;
 
     int shutting_down;
-};
+} snip_context_t;
 
 
 enum snip_pair_state {
@@ -65,7 +65,7 @@ enum snip_pair_state {
 
 };
 
-typedef struct snip_pair {
+typedef struct snip_pair_e {
     struct bufferevent *client_bev;
 
     enum snip_pair_state state;
@@ -90,16 +90,16 @@ typedef struct snip_pair {
     int references;
 
     struct snip_TLS_version client_version;
-} snip_pair;
+} snip_pair_t;
 
 /**
  * Create an snip_client record.
  * @return
  */
-snip_pair *
+snip_pair_t *
 snip_client_create() {
-    snip_pair *client = (snip_pair *) malloc(sizeof(snip_pair));
-    memset(client, '\0', sizeof(snip_pair));
+    snip_pair_t *client = (snip_pair_t *) malloc(sizeof(snip_pair_t));
+    memset(client, '\0', sizeof(snip_pair_t));
     return client;
 }
 
@@ -109,7 +109,7 @@ snip_client_create() {
  */
 void
 snip_client_retain(
-        snip_pair *client
+        snip_pair_t *client
 ) {
     client->references += 1;
 }
@@ -120,7 +120,7 @@ snip_client_retain(
  */
 void
 snip_client_release(
-        snip_pair *client
+        snip_pair_t *client
 ) {
     client->references -=1;
     if(!client->references) {
@@ -138,7 +138,7 @@ snip_client_release(
  * @return
  */
 size_t
-snip_get_handshake_buffer_length(snip_pair *client) {
+snip_get_handshake_buffer_length(snip_pair_t *client) {
     // If the ClientHello is contained in a single TLS record, we can just borrow their buffer.
     if(!client->handshake_buffer) {
         return client->current_record_length;
@@ -156,7 +156,7 @@ snip_get_handshake_buffer_length(snip_pair *client) {
  * @return The start of the handshake message buffer.
  */
 unsigned char *
-snip_get_handshake_buffer(snip_pair *client, struct evbuffer *input, size_t pullup, size_t *available) {
+snip_get_handshake_buffer(snip_pair_t *client, struct evbuffer *input, size_t pullup, size_t *available) {
     // If the ClientHello is contained in a single TLS record, we can just borrow their buffer.
     if(!client->handshake_buffer) {
         *available = client->current_record_length;
@@ -182,7 +182,7 @@ client_read_cb(
     struct evbuffer *input = bufferevent_get_input(bev);
     struct evbuffer *output = bufferevent_get_output(bev);
 
-    snip_pair *client = (snip_pair *) ctx;
+    snip_pair_t *client = (snip_pair_t *) ctx;
     size_t available_input = evbuffer_get_length(input);
     size_t available_record = 0;
     size_t available_handshake = 0;
@@ -484,7 +484,7 @@ client_event_cb(
         short events,
         void *ctx
 ) {
-    snip_pair *client = (snip_pair *) ctx;
+    snip_pair_t *client = (snip_pair_t *) ctx;
     if (events & BEV_EVENT_ERROR)
         perror("Error from bufferevent");
     if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
@@ -513,7 +513,7 @@ snip_accept_incoming_cb(
     struct event_base *base = evconnlistener_get_base(listener);
 
     // Save it all to the pair
-    snip_pair *client = snip_client_create();
+    snip_pair_t *client = snip_client_create();
     client->client_bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
     bufferevent_setcb(client->client_bev, client_read_cb, NULL, client_event_cb, (void *) client);
 
@@ -581,10 +581,10 @@ snip_start_listening(struct event_base *base, uint16_t port) {
  * Create the snip_context object.
  * @return
  */
-struct snip_context *
+snip_context_t *
 snip_context_create() {
-    struct snip_context *context = malloc(sizeof(struct snip_context));
-    memset(context, '\0', sizeof(struct snip_context));
+    snip_context_t *context = malloc(sizeof(snip_context_t));
+    memset(context, '\0', sizeof(snip_context_t));
     return context;
 }
 
@@ -592,7 +592,7 @@ snip_context_create() {
  * Initialize the context, with event bases and the like.
  */
 void
-snip_context_init(struct snip_context *context, int argc, char **argv) {
+snip_context_init(snip_context_t *context, int argc, char **argv) {
     context->argc = argc;
     context->argv = argv;
     // right now we only support pthreads.  Windows threads are TODO.
@@ -603,21 +603,21 @@ snip_context_init(struct snip_context *context, int argc, char **argv) {
 }
 
 
-void snip_stop(struct snip_context *context) {
+void snip_stop(snip_context_t *context) {
     context->shutting_down = 1;
     event_base_loopexit(context->event_base, &snip_shutdown_timeout);
 
 }
 
 void snip_sigint_handler(evutil_socket_t fd, short events, void *arg) {
-    struct snip_context *context = (struct snip_context *) arg;
+    snip_context_t *context = (snip_context_t *) arg;
     if(context->shutting_down) {
         snip_stop(context);
     }
 }
 
 void snip_sighup_handler(evutil_socket_t fd, short events, void *arg) {
-    struct snip_context *context = (struct snip_context *) arg;
+    snip_context_t *context = (snip_context_t *) arg;
     pthread_mutex_lock(&(context->context_lock));
     if(!context->pending_reload) {
         context->pending_reload = 1;
@@ -628,7 +628,7 @@ void snip_sighup_handler(evutil_socket_t fd, short events, void *arg) {
 
 void * snip_run_network(void *ctx)
 {
-    struct snip_context *context = (struct snip_context *) ctx;
+    snip_context_t *context = (snip_context_t *) ctx;
     evsignal_new(context->event_base, SIGHUP, snip_sighup_handler, (void *) context);
     evsignal_new(context->event_base, SIGINT, snip_sigint_handler, (void *) context);
     event_base_dispatch(context->event_base);
@@ -639,7 +639,7 @@ void * snip_run_network(void *ctx)
  * Read the configuration and start handling requests.
  * @param[in,out] context
  */
-void snip_run(struct snip_context *context)
+void snip_run(snip_context_t *context)
 {
     snip_reload_config(context->event_base, context->argc, context->argv);
     pthread_cond_init(&(context->work_for_main_thread), NULL);

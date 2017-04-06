@@ -24,35 +24,28 @@
 extern "C" {
 #endif
 
-struct snip_context;
-
-/**
- * Start listening a given port.
- * @param base - Event base.
- * @param port - TCP Port
- * @return LibEvent connection listener structure.
- */
-struct evconnlistener *
-snip_start_listening(struct event_base *base, uint16_t port);
+// We want to keep the context anonymous to the outside.
+typedef struct snip_context_e * snip_context_ptr_t;
 
 /**
  * Create the snip_context object.
  * @return
  */
-struct snip_context *
+snip_context_ptr_t
 snip_context_create();
 
 /**
  * Initialize the context, with event bases and the like.
  */
 void
-snip_context_init(struct snip_context *context, int argc, char **argv);
+snip_context_init(snip_context_ptr_t context, int argc, char **argv);
 
 /**
  * Read the configuration and start handling requests.
  * @param[in,out] context
  */
-void snip_run(struct snip_context *context);
+void
+snip_run(snip_context_ptr_t context);
 
 #ifdef __cplusplus
 }

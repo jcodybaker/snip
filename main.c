@@ -8,7 +8,7 @@
 
 int main(int argc, char **argv) {
 
-    struct snip_context *context = snip_context_create();
+    snip_context_t *context = snip_context_create();
     snip_context_init(context, argc, argv);
     snip_run(context);
     return 0;
