@@ -197,26 +197,26 @@ snip_parse_port(const char *port_string, uint16_t *port) {
     const char *port_end = port_string;
     while(1) {
         if((port_end - port_string) > 5) {
-            return 0;
+            return FALSE;
         }
         if(*port_end == '\0') {
             break;
         }
         if((*port_end < '0') || (*port_end > '9')) {
-            return 0; // Return false if the port contains a non-digit character.
+            return FALSE; // Return false if the port contains a non-digit character.
         }
         port_end += 1;
     }
     if(port_string == port_end) {
         // A colon was found, but no port was found after it.
-        return 0;
+        return FALSE;
     }
     unsigned long port_ul = strtoul(port_string, NULL, 10);
     if(port_ul > 0xFFFF) { // port must be a 16-bit number.
-        return 0;
+        return FALSE;
     }
     *port = (uint16_t) port_ul;
-    return 1;
+    return TRUE;
 }
 
 /**
@@ -262,7 +262,7 @@ snip_parse_config_file(snip_config_t *config) {
     FILE *config_file = fopen(config->config_path, "r");
     if(!config_file) {
         snip_log_fatal(SNIPROXY_EXIT_ERROR_INVALID_CONFIG, "Could not read config file '%s'.", config->config_path);
-        return 0;
+        return FALSE;
     }
 
     yaml_parser_t parser;
@@ -749,7 +749,7 @@ snip_parse_config_file(snip_config_t *config) {
     }
     yaml_parser_delete(&parser);
 
-    return 1;
+    return TRUE;
 }
 
 /**
@@ -769,7 +769,9 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv) {
     if(!config->config_path) {
         config->config_path = SNIP_INSTALL_CONF_PATH;
     }
-    snip_parse_config_file(config);
+    if(!snip_parse_config_file(config)) {
+
+    }
     //int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
     //int evdns_base_resume(struct evdns_base *base);
 }
