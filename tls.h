@@ -2,8 +2,8 @@
 // Created by Cody Baker on 3/18/17.
 //
 
-#ifndef SNIPROXY_TLS_H
-#define SNIPROXY_TLS_H
+#ifndef SNIP_TLS_H
+#define SNIP_TLS_H
 
 #include <stdint.h>
 
@@ -64,4 +64,4 @@ struct snip_TLS_version {
 
 
 
-#endif //SNIPROXY_TLS_H
+#endif //SNIP_TLS_H

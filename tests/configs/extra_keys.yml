@@ -1,4 +1,4 @@
-# Example sniproxy configuration file.
+# Example snip configuration file.
 # J Cody Baker - 2017 cody@codybaker.com
 hello: world
 listeners:

@@ -20,7 +20,7 @@
 
 #include "config.h"
 #include "compat.h"
-#include "sniproxy.h"
+#include "snip.h"
 #include "tls.h"
 
 #include <pthread.h>

@@ -131,7 +131,7 @@ snip_config_parse_args(snip_config_t *config, int argc, char **argv) {
                 config->config_path = optarg;
                 break;
             case 'h':
-                snip_config_display_help_and_exit(argc ? argv[0] : "sniproxy");
+                snip_config_display_help_and_exit(argc ? argv[0] : "snip");
                 break;
             case -1:
                 break;
@@ -146,7 +146,7 @@ snip_config_parse_args(snip_config_t *config, int argc, char **argv) {
  * Log a configuration event with location references within the configuration file.
  * @param config
  * @param event
- * @param level - Log severity level.  If SNIPROXY_LOG_LEVEL_FATAL, we will shutdown and exit.
+ * @param level - Log severity level.  If SNIP_LOG_LEVEL_FATAL, we will shutdown and exit.
  * @param msg_format - Single-line description of the condition we want to log.  printf style format string populated
  *      with variadic arguments provided in args.
  * @param ... - List of arguments for populating the format string msg_format.
@@ -175,8 +175,8 @@ snip_log_config(snip_config_t *config, yaml_event_t *event, snip_log_level_t lev
                     event->end_mark.column);
     va_list args;
     va_start(args, msg_format);
-    if(level == SNIPROXY_LOG_LEVEL_FATAL) {
-        snip_vlog_fatal(SNIPROXY_EXIT_ERROR_INVALID_CONFIG, buffer, args);
+    if(level == SNIP_LOG_LEVEL_FATAL) {
+        snip_vlog_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG, buffer, args);
     }
     else {
         snip_vlog(level, buffer, args);
@@ -192,7 +192,7 @@ snip_log_config(snip_config_t *config, yaml_event_t *event, snip_log_level_t lev
 * @param port[out] Pointer to a uint16_t where the port value should be stored.
 * @return True if the port is valid and was parsed properly.  False otherwise.
 */
-SNIPROXY_BOOLEAN
+SNIP_BOOLEAN
 snip_parse_port(const char *port_string, uint16_t *port) {
     const char *port_end = port_string;
     while(1) {
@@ -228,7 +228,7 @@ snip_parse_port(const char *port_string, uint16_t *port) {
  * @param port[out] - Address where we can store the port.  We set 0 if the port isn't specified.
  * @return true (1) if the parse was successful, false (0) otherwise.
  */
-SNIPROXY_BOOLEAN
+SNIP_BOOLEAN
 snip_parse_target(const char *target, char **hostname, uint16_t *port) {
     *hostname = NULL;
     const char *colon = strchr(target, ':');
@@ -257,11 +257,11 @@ snip_parse_target(const char *target, char **hostname, uint16_t *port) {
  * Read the configuration file and apply it to the specified config structure.
  * @param config[in,out]
  */
-SNIPROXY_BOOLEAN
+SNIP_BOOLEAN
 snip_parse_config_file(snip_config_t *config) {
     FILE *config_file = fopen(config->config_path, "r");
     if(!config_file) {
-        snip_log_fatal(SNIPROXY_EXIT_ERROR_INVALID_CONFIG, "Could not read config file '%s'.", config->config_path);
+        snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG, "Could not read config file '%s'.", config->config_path);
         return FALSE;
     }
 
@@ -319,7 +319,7 @@ snip_parse_config_file(snip_config_t *config) {
 
     while(1) {
         if (!yaml_parser_parse(&parser, &event)) {
-            snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Error parsing ");
+            snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "Error parsing ");
         }
         /*
         switch(event.type) {
@@ -369,7 +369,7 @@ snip_parse_config_file(snip_config_t *config) {
 
         if(event.type == YAML_STREAM_END_EVENT) {
             if(state != snip_config_parse_success) {
-                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Unexpected end of configuration ");
+                snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "Unexpected end of configuration ");
             }
             break;
         }
@@ -383,7 +383,7 @@ snip_parse_config_file(snip_config_t *config) {
                      (event.type == YAML_SEQUENCE_START_EVENT) ||
                      (event.type == YAML_SEQUENCE_END_EVENT))
             {
-                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "The root element must be a key/value map ");
+                snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "The root element must be a key/value map ");
                 state = snip_config_parse_state_error;
             }
         }
@@ -403,7 +403,7 @@ snip_parse_config_file(snip_config_t *config) {
                     skip_rvalue_depth = current_depth;
                     snip_log_config(config,
                                     &event,
-                                    SNIPROXY_LOG_LEVEL_WARNING,
+                                    SNIP_LOG_LEVEL_WARNING,
                                     "Unexpected key '%s' ",
                                     event.data.scalar.value
                     );
@@ -413,7 +413,7 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_success;
             }
             else if(event.type != YAML_NO_EVENT) {
-                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Key had unexpected type ");
+                snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "Key had unexpected type ");
                 state = snip_config_parse_state_error;
             }
         }
@@ -423,7 +423,7 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_state_listeners_in_list;
             }
             else if (event.type != YAML_NO_EVENT) {
-                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "'listeners' section was not a list ");
+                snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "'listeners' section was not a list ");
                 state = snip_config_parse_state_error;
             }
         }
@@ -454,7 +454,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "The 'listeners' section must be a list of key/value dictionaries ");
                 state = snip_config_parse_state_error;
             }
@@ -478,7 +478,7 @@ snip_parse_config_file(snip_config_t *config) {
                     skip_rvalue_depth = current_depth;
                     snip_log_config(config,
                                     &event,
-                                    SNIPROXY_LOG_LEVEL_WARNING,
+                                    SNIP_LOG_LEVEL_WARNING,
                                     "Unexpected key '%s' ",
                                     event.data.scalar.value
                     );
@@ -490,7 +490,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "The 'listeners' section must be a list of key/value dictionaries ");
                 state = snip_config_parse_state_error;
             }
@@ -508,7 +508,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "The 'routes' section must be a list or dictionary ");
                 state = snip_config_parse_state_error;
             }
@@ -549,7 +549,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "The 'routes' section must be a list or dictionary ");
                 state = snip_config_parse_state_error;
             }
@@ -567,7 +567,7 @@ snip_parse_config_file(snip_config_t *config) {
                 snip_log_config(
                         config,
                         &event,
-                        SNIPROXY_LOG_LEVEL_FATAL,
+                        SNIP_LOG_LEVEL_FATAL,
                         "The 'routes' section must either be a string:string dictionary, or a list of dictionaries ");
                 state = snip_config_parse_state_error;
             }
@@ -604,7 +604,7 @@ snip_parse_config_file(snip_config_t *config) {
                 snip_log_config(
                         config,
                         &event,
-                        SNIPROXY_LOG_LEVEL_FATAL,
+                        SNIP_LOG_LEVEL_FATAL,
                         "The 'routes' section must either be a string:string dictionary, or a list of dictionaries ");
                 state = snip_config_parse_state_error;
             }
@@ -629,7 +629,7 @@ snip_parse_config_file(snip_config_t *config) {
                     skip_rvalue_depth = current_depth;
                     snip_log_config(config,
                                     &event,
-                                    SNIPROXY_LOG_LEVEL_WARNING,
+                                    SNIP_LOG_LEVEL_WARNING,
                                     "Unexpected key '%s' ",
                                     event.data.scalar.value
                     );
@@ -639,7 +639,7 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_state_routes_list;
             }
             else if(event.type != YAML_NO_EVENT) {
-                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Key had unexpected type ");
+                snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "Key had unexpected type ");
                 state = snip_config_parse_state_error;
             }
         }
@@ -652,7 +652,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "Route property 'sni_hostname' expects a string value ");
                 state = snip_config_parse_state_error;
             }
@@ -666,7 +666,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "Route property 'target' expects a string value ");
                 state = snip_config_parse_state_error;
             }
@@ -676,7 +676,7 @@ snip_parse_config_file(snip_config_t *config) {
                 if(!snip_parse_port((const char *) event.data.scalar.value, &(current_route_item->value.port))) {
                     snip_log_config(config,
                                     &event,
-                                    SNIPROXY_LOG_LEVEL_FATAL,
+                                    SNIP_LOG_LEVEL_FATAL,
                                     "Invalid port specification '%s' for route ",
                                     event.data.scalar.value);
                     state = snip_config_parse_state_error;
@@ -688,7 +688,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "Route property 'target_port' expects an integer between 0 and 65535 ");
                 state = snip_config_parse_state_error;
             }
@@ -699,7 +699,7 @@ snip_parse_config_file(snip_config_t *config) {
                 {
                     snip_log_config(config,
                                     &event,
-                                    SNIPROXY_LOG_LEVEL_FATAL,
+                                    SNIP_LOG_LEVEL_FATAL,
                                     "Invalid port specification '%s' for route ",
                                     event.data.scalar.value);
                     state = snip_config_parse_state_error;
@@ -711,7 +711,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "'listener' property 'port' expects an integer between 0 and 65535 ");
                 state = snip_config_parse_state_error;
             }
@@ -725,7 +725,7 @@ snip_parse_config_file(snip_config_t *config) {
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
-                                SNIPROXY_LOG_LEVEL_FATAL,
+                                SNIP_LOG_LEVEL_FATAL,
                                 "'listener' property 'bind' expects a string value ");
                 state = snip_config_parse_state_error;
             }
@@ -742,7 +742,7 @@ snip_parse_config_file(snip_config_t *config) {
         }
         else if(state == snip_config_parse_success) {
             if(event.type != YAML_DOCUMENT_END_EVENT && event.type != YAML_NO_EVENT) {
-                snip_log_config(config, &event, SNIPROXY_LOG_LEVEL_FATAL, "Unexpected content after configuration ");
+                snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "Unexpected content after configuration ");
             }
         }
         yaml_event_delete(&event);

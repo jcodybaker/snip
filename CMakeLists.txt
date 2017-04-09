@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.6)
-project(sniproxy)
+project(snip)
 
 set(SNIP_VERSION 0.1)
 
@@ -21,10 +21,10 @@ find_package(OpenSSL REQUIRED)
 include_directories(${OPENSSL_INCLUDE_DIR})
 set(LIBS ${LIBS} ${OPENSSL_LIBRARIES})
 
-set(SOURCE_FILES sniproxy.c sniproxy.h tls.h compat.h config.c config.h log.c log.h)
-add_executable(sniproxy main.c ${SOURCE_FILES})
+set(SOURCE_FILES snip.c snip.h tls.h compat.h config.c config.h log.c log.h)
+add_executable(snip main.c ${SOURCE_FILES})
 
-target_compile_definitions(sniproxy
+target_compile_definitions(snip
         PUBLIC SNIP_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
         PUBLIC SNIP_INSTALL_CONF_DIR="${CMAKE_INSTALL_PREFIX}etc/"
         PUBLIC SNIP_INSTALL_CONF_PATH="${CMAKE_INSTALL_CONF_DIR}snip.yml"
@@ -33,14 +33,14 @@ target_compile_definitions(sniproxy
 
 add_subdirectory(tests)
 
-target_link_libraries(sniproxy ${LIBS})
+target_link_libraries(snip ${LIBS})
 
 # We build this as a library so we can test with it.  May eventually make it available this way also though.
-add_library(sniproxy_lib ${SOURCE_FILES})
-target_compile_definitions(sniproxy_lib
+add_library(snip_lib ${SOURCE_FILES})
+target_compile_definitions(snip_lib
         PUBLIC SNIP_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
         PUBLIC SNIP_INSTALL_CONF_DIR="${CMAKE_INSTALL_PREFIX}etc/"
         PUBLIC SNIP_INSTALL_CONF_PATH="${CMAKE_INSTALL_CONF_DIR}snip.yml"
         PUBLIC SNIP_VERSION="${SNIP_VERSION}"
         )
-target_link_libraries(sniproxy_lib ${LIBS})
+target_link_libraries(snip_lib ${LIBS})

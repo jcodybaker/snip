@@ -1,4 +1,4 @@
-project(sniproxy_test)
+project(snip_test)
 
 add_subdirectory(lib/gtest-1.8.0)
 
@@ -11,4 +11,4 @@ target_compile_definitions(runConfigTest
         )
 
 target_link_libraries(runConfigTest gtest gtest_main)
-target_link_libraries(runConfigTest sniproxy_lib)
+target_link_libraries(runConfigTest snip_lib)

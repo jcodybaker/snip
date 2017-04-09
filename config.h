@@ -2,8 +2,8 @@
 // Created by Cody Baker on 3/27/17.
 //
 
-#ifndef SNIPROXY_CONFIG_H
-#define SNIPROXY_CONFIG_H
+#ifndef SNIP_CONFIG_H
+#define SNIP_CONFIG_H
 
 #include <stdint.h>
 #include <event2/event.h>
@@ -51,6 +51,8 @@ typedef struct snip_config_e {
     snip_config_route_t *default_route;
 } snip_config_t;
 
+
+
 /**
  * Create a snip_config_t object.
  * @return
@@ -81,7 +83,7 @@ snip_reload_config(struct event_base *event_base, int argc, char **argv);
  * Read the configuration file and apply it to the specified config structure.
  * @param config[in,out]
  */
-SNIPROXY_BOOLEAN
+SNIP_BOOLEAN
 snip_parse_config_file(snip_config_t *config);
 
 /**
@@ -91,7 +93,7 @@ snip_parse_config_file(snip_config_t *config);
 * @param port[out] Pointer to a uint16_t where the port value should be stored.
 * @return True if the port is valid and was parsed properly.  False otherwise.
 */
-SNIPROXY_BOOLEAN
+SNIP_BOOLEAN
 snip_parse_port(const char *port_string, uint16_t *port);
 
 /**
@@ -103,7 +105,7 @@ snip_parse_port(const char *port_string, uint16_t *port);
  * @param port[out] - Address where we can store the port.  We set 0 if the port isn't specified.
  * @return true (1) if the parse was successful, false (0) otherwise.
  */
-SNIPROXY_BOOLEAN
+SNIP_BOOLEAN
 snip_parse_target(const char *target, char **hostname, uint16_t *port);
 
 /**
@@ -119,4 +121,4 @@ snip_config_parse_args(snip_config_t *config, int argc, char **argv);
 }
 #endif
 
-#endif //SNIPROXY_CONFIG_H
+#endif //SNIP_CONFIG_H

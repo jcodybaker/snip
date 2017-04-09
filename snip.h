@@ -2,8 +2,8 @@
 // Created by Cody Baker on 3/16/17.
 //
 
-#ifndef SNIPROXY_SNIPROXY_H
-#define SNIPROXY_SNIPROXY_H
+#ifndef SNIP_SNIP_H
+#define SNIP_SNIP_H
 
 #include <event2/event.h>
 
@@ -51,4 +51,4 @@ snip_run(snip_context_ptr_t context);
 }
 #endif
 
-#endif //SNIPROXY_SNIPROXY_H
+#endif //SNIP_SNIP_H

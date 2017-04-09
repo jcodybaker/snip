@@ -2,8 +2,8 @@
 // Created by Cody Baker on 3/19/17.
 //
 
-#ifndef SNIPROXY_COMPAT_H
-#define SNIPROXY_COMPAT_H
+#ifndef SNIP_COMPAT_H
+#define SNIP_COMPAT_H
 
 #ifndef MAX
 #define MAX(a,b) (((a)>(b))?(a):(b))
@@ -21,8 +21,8 @@
 #define FALSE 0
 #endif
 
-#ifndef SNIPROXY_BOOLEAN
-#define SNIPROXY_BOOLEAN int
+#ifndef SNIP_BOOLEAN
+#define SNIP_BOOLEAN int
 #endif
 
-#endif //SNIPROXY_COMPAT_H
+#endif //SNIP_COMPAT_H
