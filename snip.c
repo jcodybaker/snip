@@ -22,6 +22,7 @@
 #include "compat.h"
 #include "snip.h"
 #include "tls.h"
+#include "log.h"
 
 #include <pthread.h>
 
@@ -496,7 +497,7 @@ client_event_cb(
 
 /**
  * Called when a new connection happens on the listener.
- * @param listener
+ * @param evconn
  * @param fd
  * @param address
  * @param socklen
@@ -504,13 +505,14 @@ client_event_cb(
  */
 static void
 snip_accept_incoming_cb(
-        struct evconnlistener *listener,
+        struct evconnlistener *evconn,
         evutil_socket_t fd,
         struct sockaddr *address,
         int socklen,
         void *ctx
 ) {
-    struct event_base *base = evconnlistener_get_base(listener);
+    struct event_base *base = evconnlistener_get_base(evconn);
+    snip_config_listener_t *listener = (snip_config_listener_t *) ctx;
 
     // Save it all to the pair
     snip_pair_t *client = snip_client_create();
@@ -527,54 +529,56 @@ snip_accept_incoming_cb(
 
 /**
  * Handle an error on the connection listener.
- * @param listener
+ * @param evconn
  * @param ctx
  */
 static void
-snip_accept_error_cb(struct evconnlistener *listener, void *ctx)
+snip_accept_error_cb(struct evconnlistener *evconn, void *ctx)
 {
-    struct event_base *base = evconnlistener_get_base(listener);
+    struct event_base *base = evconnlistener_get_base(evconn);
+    snip_config_listener_t *listener = (snip_config_listener_t *) ctx;
     int err = EVUTIL_SOCKET_ERROR();
-    // TODO - Should do something better than this.
-    fprintf(stderr, "Got an error %d (%s) on the listener. "
-            "Shutting down.\n", err, evutil_socket_error_to_string(err));
-
+    snip_log_fatal(
+            SNIP_EXIT_ERROR_SOCKET,
+            "An error occurred while setting up a listener: (%d) %s",
+            err,
+            evutil_socket_error_to_string(err)
+    );
+    snip_config_release(listener->config);
     event_base_loopexit(base, NULL);
 }
-//
-//
-//static void
-//snip_stop_listening(struct evconnlistener *listener) {
-//
-//}
 
 /**
- * Start listening a given port.
- * @param base - Event base.
- * @param port - TCP Port
- * @return LibEvent connection listener structure.
+ * Open a socket and start listening for new connections based upon a configuration object.
+ * @param context
+ * @param listener
+ * @return
  */
-struct evconnlistener *
-snip_start_listening(struct event_base *base, uint16_t port) {
-    struct evconnlistener *listener;
-    struct sockaddr_in sin;
-
-    /* Clear the sockaddr before using it, in case there are extra
-     * platform-specific fields that can mess us up. */
-    memset(&sin, 0, sizeof(sin));
-    sin.sin_family = AF_INET;
-    sin.sin_addr.s_addr = htonl(0);
-    sin.sin_port = htons(port);
-
-    listener = evconnlistener_new_bind(base, snip_accept_incoming_cb, NULL,
-                                       LEV_OPT_CLOSE_ON_FREE|LEV_OPT_REUSEABLE, -1,
-                                       (struct sockaddr*)&sin, sizeof(sin));
-    if (!listener) {
-        perror("Couldn't create listener");
-        return NULL;
+SNIP_BOOLEAN
+snip_listen(snip_context_ptr_t context, snip_config_listener_t *listener) {
+    memset(&(listener->socket_addr), 0, sizeof(listener->socket_addr));
+    listener->socket_addr.sin_family = AF_INET;
+    listener->socket_addr.sin_addr.s_addr = htonl(0);
+    listener->socket_addr.sin_port = htons(listener->bind_port);
+    snip_config_retain(context->config);
+    listener->socket = evconnlistener_new_bind(context->event_base,
+                                               snip_accept_incoming_cb,
+                                               (void *) listener,
+                                               LEV_OPT_CLOSE_ON_FREE|LEV_OPT_REUSEABLE|LEV_OPT_THREADSAFE,
+                                               -1,
+                                               (struct sockaddr*)&listener->socket_addr,
+                                               sizeof(listener->socket_addr)
+    );
+    if (!listener->socket) {
+        snip_config_release(context->config);
+        snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                       "Failed to open socket: %s",
+                       strerror(errno)
+        );
+        return FALSE;
     }
-    evconnlistener_set_error_cb(listener, snip_accept_error_cb);
-    return listener;
+    evconnlistener_set_error_cb(listener->socket, snip_accept_error_cb);
+    return TRUE;
 }
 
 /**
@@ -641,7 +645,7 @@ void * snip_run_network(void *ctx)
  */
 void snip_run(snip_context_t *context)
 {
-    snip_reload_config(context->event_base, context->argc, context->argv);
+    snip_reload_config(context, context->argc, context->argv);
     pthread_cond_init(&(context->work_for_main_thread), NULL);
     pthread_create(&(context->event_thread), NULL, snip_run_network, (void *) context);
     pthread_mutex_init(&(context->context_lock), NULL);
@@ -654,7 +658,7 @@ void snip_run(snip_context_t *context)
         if(context->pending_reload) {
             context->pending_reload = 0;
             pthread_mutex_unlock(&(context->context_lock));
-            snip_reload_config(context->event_base, context->argc, context->argv);
+            snip_reload_config(context, context->argc, context->argv);
             pthread_mutex_lock(&(context->context_lock));
         }
     }
@@ -664,3 +668,86 @@ void snip_run(snip_context_t *context)
     pthread_cond_destroy(&(context->work_for_main_thread));
 }
 
+/**
+ * Shutdown a listener inside the event loop.
+ * @param fd
+ * @param events
+ * @param ctx
+ */
+void
+snip_shutdown_listener(evutil_socket_t fd, short events, void *ctx) {
+    snip_config_listener_t *listener = (snip_config_listener_t *) ctx;
+    evconnlistener_free(listener->socket);
+    snip_config_release(listener->config);
+}
+
+/**
+ * Reload the configuration file asynchronously.
+ * @param context
+ * @param argc - argument count from the command line.  If this is being built into another package, this can be 0
+ *      provided the default config location is sufficient.
+ * @param argv - argument strings from the command line.  If this is being build into another package, this can be NULL
+ *      provided the default config location is sufficient.
+ */
+void
+snip_reload_config(snip_context_ptr_t context, int argc, char **argv) {
+    snip_config_t *new_config = snip_config_create();
+    snip_config_retain(new_config);
+    snip_config_t *old_config = context->config;
+
+    if(argc && argv) {
+        snip_config_parse_args(new_config, argc, argv);
+    }
+    if(!new_config->config_path) {
+        new_config->config_path = SNIP_INSTALL_CONF_PATH;
+    }
+    if(!snip_parse_config_file(new_config)) {
+        snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG, "Invalid configuration file '%s'.", new_config->config_path);
+        return;
+    }
+
+    snip_config_listener_list_t *new_listener = new_config->listeners;
+    snip_config_listener_list_t *old_listener;
+    while(new_listener) {
+        old_listener = old_config ? old_config->listeners : NULL;
+        while(old_listener) {
+            if(old_listener->value.socket &&
+               snip_listener_socket_is_equal(&(old_listener->value), &(new_listener->value)))
+            {
+                snip_listener_replace(&(old_listener->value), &(new_listener->value));
+                break;
+            }
+            old_listener = old_listener->next;
+        }
+        if(!new_listener->value.socket) {
+            // We're not already listening on this port/interface.  Start.
+            snip_listen(context, &(new_listener->value));
+        }
+        new_listener = new_listener->next;
+    }
+
+    old_listener = old_config ? old_config->listeners : NULL;
+    while(old_listener) {
+        if(old_listener->value.socket) {
+            // evconnlistener is reference counted and threadsafe provided we use the LEV_OPT_THREADSAFE flag.
+            event_base_once(
+                    context->event_base,
+                    -1,
+                    EV_TIMEOUT,
+                    snip_shutdown_listener,
+                    (void *) &(old_listener->value),
+                    NULL
+            );
+
+
+            old_listener->value.socket = NULL;
+        }
+        old_listener = old_listener->next;
+    }
+
+    context->config = new_config;
+    snip_config_release(old_config);
+
+    //int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
+    //int evdns_base_resume(struct evdns_base *base);
+}

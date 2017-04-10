@@ -4,11 +4,13 @@
 
 #include "config.h"
 #include "log.h"
+#include "snip.h"
 
 #include <string.h>
 #include <stdlib.h>
 #include <getopt.h>
 #include <yaml.h>
+#include <pthread.h>
 
 /**
  * Create a snip_config_t object.
@@ -18,6 +20,7 @@ snip_config_t *
 snip_config_create() {
     snip_config_t *config = malloc(sizeof(snip_config_t));
     memset(config, '\0', sizeof(snip_config_t));
+    pthread_mutex_init(&(config->lock), 0);
     return config;
 }
 
@@ -31,6 +34,7 @@ snip_config_listener_list_create() {
     memset(list, '\0', sizeof(snip_config_listener_list_t));
     return list;
 }
+
 
 /**
  * Recursively destroy a list of snip_config_listeners.
@@ -753,25 +757,67 @@ snip_parse_config_file(snip_config_t *config) {
 }
 
 /**
- * Reload the configuration file asynchronously.
- * @param event_base
- * @param argc - argument count from the command line.  If this is being built into another package, this can be 0
- *      provided the default config location is sufficient.
- * @param argv - argument strings from the command line.  If this is being build into another package, this can be NULL
- *      provided the default config location is sufficient.
+ * Compare two listener configurations to see if they're equal.  Order does not matter.
+ * @param a
+ * @param b
+ * @return - True if the listeners would result in the same socket configuration, false otherwise.
+ */
+SNIP_BOOLEAN
+snip_listener_socket_is_equal(snip_config_listener_t *a, snip_config_listener_t *b) {
+    if(a->bind_port != b->bind_port) {
+        return FALSE;
+    }
+    if(strcmp(a->bind_addr, b->bind_addr)) {
+        return FALSE;
+    }
+    if(a->ipv4 != b->ipv4 || a->ipv6 != b->ipv6) {
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/**
+ * Given a pointer to an old listener configuration object, and a new one, copy the already bound socket from the old
+ * to the new.
+ * @param old_listener
+ * @param new_listener
  */
 void
-snip_reload_config(struct event_base *event_base, int argc, char **argv) {
-    snip_config_t *config = snip_config_create();
-    if(argc && argv) {
-        snip_config_parse_args(config, argc, argv);
-    }
-    if(!config->config_path) {
-        config->config_path = SNIP_INSTALL_CONF_PATH;
-    }
-    if(!snip_parse_config_file(config)) {
+snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener_t *new_listener) {
+    new_listener->socket = old_listener->socket;
+    old_listener->socket = NULL;
+    memcpy(&(new_listener->socket_addr), &(old_listener->socket_addr), sizeof(struct sockaddr_in));
+}
 
+/**
+ * Increase the reference count on the snip_config.
+ * @param config
+ */
+void
+snip_config_retain(snip_config_t *config) {
+    pthread_mutex_lock(&(config->lock));
+    config->references += 1;
+    pthread_mutex_unlock(&(config->lock));
+}
+
+/**
+ * Release and possibly free the reference count on the snip_config.
+ * @param config
+ */
+void
+snip_config_release(snip_config_t *config) {
+    SNIP_BOOLEAN should_free = FALSE;
+    pthread_mutex_lock(&(config->lock));
+    config->references += 1;
+    pthread_mutex_unlock(&(config->lock));
+    if(should_free) {
+        if(config->listeners) {
+            snip_config_listener_list_destroy(config->listeners);
+        }
+        if(config->routes) {
+            snip_config_route_list_destroy(config->routes);
+        }
+        pthread_mutex_destroy(&(config->lock));
+        free(config);
     }
-    //int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
-    //int evdns_base_resume(struct evdns_base *base);
 }

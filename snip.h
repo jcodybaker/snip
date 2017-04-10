@@ -47,6 +47,27 @@ snip_context_init(snip_context_ptr_t context, int argc, char **argv);
 void
 snip_run(snip_context_ptr_t context);
 
+/**
+ * Open a socket and start listening for new connections based upon a configuration object.
+ * @param context
+ * @param listener
+ * @return
+ */
+SNIP_BOOLEAN
+snip_listen(snip_context_ptr_t context, snip_config_listener_t *listener);
+
+/**
+ * Reload the configuration file asynchronously.
+ * @param context
+ * @param argc - argument count from the command line.  If this is being built into another package, this can be 0
+ *      provided the default config location is sufficient.
+ * @param argv - argument strings from the command line.  If this is being build into another package, this can be NULL
+ *      provided the default config location is sufficient.
+ */
+void
+snip_reload_config(snip_context_ptr_t context, int argc, char **argv);
+
+
 #ifdef __cplusplus
 }
 #endif

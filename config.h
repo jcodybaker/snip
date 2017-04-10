@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <event2/event.h>
 #include <event2/dns.h>
+#include <event2/listener.h>
 
 #include "compat.h"
 
@@ -15,6 +16,7 @@
 extern "C" {
 #endif
 
+// We want to keep the context anonymous to the outside.
 
 typedef struct snip_config_route {
     char *sni_hostname;
@@ -35,6 +37,11 @@ typedef struct snip_config_listener_e {
 
     snip_config_route_list_t *routes;
     snip_config_route_t *default_route;
+
+    struct evconnlistener *socket;
+    struct sockaddr_in socket_addr;
+
+    struct snip_config_e *config;
 } snip_config_listener_t;
 
 typedef struct snip_config_listener_list_e {
@@ -49,6 +56,11 @@ typedef struct snip_config_e {
 
     snip_config_route_list_t *routes;
     snip_config_route_t *default_route;
+
+    pthread_mutex_t lock;
+    int references;
+
+    struct snip_context_e *context;
 } snip_config_t;
 
 
@@ -61,6 +73,20 @@ snip_config_t *
 snip_config_create();
 
 /**
+ * Increase the reference count on the snip_config.
+ * @param config
+ */
+void
+snip_config_retain(snip_config_t *config);
+
+/**
+ * Release and possibly free the reference count on the snip_config.
+ * @param config
+ */
+void
+snip_config_release(snip_config_t *config);
+
+/**
  * Maps the SNI hostname into a destination hostname based upon configuration.
  * @param sni_hostname[in]
  * @return
@@ -68,16 +94,7 @@ snip_config_create();
 char *
 snip_get_target_hostname_from_sni_hostname(char *sni_hostname);
 
-/**
- * Reload the configuration file asynchronously.
- * @param event_base[in,out]
- * @param argc[in] - argument count from the command line.  If this is being built into another package, this can be 0
- *      provided the default config location is sufficient.
- * @param argv[in] - argument strings from the command line.  If this is being build into another package, this can be NULL
- *      provided the default config location is sufficient.
- */
-void
-snip_reload_config(struct event_base *event_base, int argc, char **argv);
+
 
 /**
  * Read the configuration file and apply it to the specified config structure.
@@ -116,6 +133,24 @@ snip_parse_target(const char *target, char **hostname, uint16_t *port);
  */
 void
 snip_config_parse_args(snip_config_t *config, int argc, char **argv);
+
+/**
+ * Given a pointer to an old listener configuration object, and a new one, copy the already bound socket from the old
+ * to the new.
+ * @param old_listener
+ * @param new_listener
+ */
+void
+snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener_t *new_listener);
+
+/**
+ * Compare two listener configurations to see if they're equal.  Order does not matter.
+ * @param a
+ * @param b
+ * @return - True if the listeners would result in the same socket configuration, false otherwise.
+ */
+SNIP_BOOLEAN
+snip_listener_socket_is_equal(snip_config_listener_t *a, snip_config_listener_t *b);
 
 #ifdef __cplusplus
 }
