@@ -787,6 +787,7 @@ snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener
     new_listener->socket = old_listener->socket;
     old_listener->socket = NULL;
     memcpy(&(new_listener->socket_addr), &(old_listener->socket_addr), sizeof(struct sockaddr_in));
+    snip_config_release(old_listener->config);
 }
 
 /**
