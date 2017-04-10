@@ -73,7 +73,7 @@ void snip_log(snip_log_level_t level, const char *msg_format, ...) {
 void snip_log_fatal(int code, const char *msg_format, ...) {
     va_list args;
     va_start(args, msg_format);
-    snip_vlog(SNIP_LOG_LEVEL_FATAL, msg_format, args);
+    snip_vlog_fatal(SNIP_LOG_LEVEL_FATAL, msg_format, args);
     va_end(args);
 }
 

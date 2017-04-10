@@ -793,12 +793,14 @@ snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener
 /**
  * Increase the reference count on the snip_config.
  * @param config
+ * @return - config parameter passed back so the "x = snip_config_retain(config);" pattern can be implemented.
  */
-void
+snip_config_t *
 snip_config_retain(snip_config_t *config) {
     pthread_mutex_lock(&(config->lock));
     config->references += 1;
     pthread_mutex_unlock(&(config->lock));
+    return config;
 }
 
 /**
@@ -821,4 +823,36 @@ snip_config_release(snip_config_t *config) {
         pthread_mutex_destroy(&(config->lock));
         free(config);
     }
+}
+
+SNIP_BOOLEAN
+snip_route_matches(snip_config_route_t *route, char *sni_hostname) {
+    // TODO - add support for regex
+    return !strcmp(route->sni_hostname, sni_hostname);
+}
+
+/**
+ * Maps the SNI hostname into a destination route based upon configuration.
+ * @param listener
+ * @param sni_hostname[in]
+ * @return
+ */
+snip_config_route_t *
+snip_get_target_from_sni_hostname(snip_config_listener_t *listener, char *sni_hostname) {
+    snip_config_t *config = listener->config;
+    snip_config_route_list_t *route_item = listener->routes;
+    while(route_item) {
+        if(snip_route_matches(&(route_item->value), sni_hostname)) {
+            return &(route_item->value);
+        }
+        route_item = route_item->next;
+    }
+    route_item = config->routes;
+    while(route_item) {
+        if(snip_route_matches(&(route_item->value), sni_hostname)) {
+            return &(route_item->value);
+        }
+        route_item = route_item->next;
+    }
+    return listener->default_route ? listener->default_route : config->default_route;
 }

@@ -1,12 +1,12 @@
 # Example snip configuration file.
 # J Cody Baker - 2017 cody@codybaker.com
 listeners:
-- port: 443
+- port: 9443
   bind: 0.0.0.0
   routes:
     - sni_hostname: "www.bing.com"
       target: "bing.com"
-      target_port: 443
+      target_port: 9443
 - port: 8443
   bind: 0.0.0.0
   routes:

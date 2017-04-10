@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <sys/socket.h>
+#include <signal.h>
 
 #include "config.h"
 #include "compat.h"
@@ -91,6 +92,13 @@ typedef struct snip_pair_e {
     int references;
 
     struct snip_TLS_version client_version;
+
+    snip_config_listener_t *listener;
+    snip_config_route_t *route;
+    struct sockaddr_storage target;
+    snip_context_t *context;
+
+    struct evdns_getaddrinfo_request *dns_request;
 } snip_pair_t;
 
 /**
@@ -167,6 +175,48 @@ snip_get_handshake_buffer(snip_pair_t *client, struct evbuffer *input, size_t pu
     *available = evbuffer_get_length(client->handshake_buffer);
     return evbuffer_pullup(client->handshake_buffer, -1);
 }
+
+
+void
+snip_lookup_target_dns_callback(int error_code, struct evutil_addrinfo *res, void *arg) {
+    snip_pair_t *client = (snip_pair_t *) arg;
+    if(error_code) {
+        snip_log(SNIP_LOG_LEVEL_ALERT, "Failed to resolve target '%s' for client: %s", evutil_gai_strerror(error_code));
+        return;
+    }
+    struct evutil_addrinfo *ai;
+    for (ai = addr; ai; ai = ai->ai_next) {
+        char buf[128];
+        const char *s = NULL;
+        if (ai->ai_family == AF_INET) {
+            memcpy(&(client->target), ai->ai_addr, sizeof(struct sockaddr_in));
+            struct sockaddr_in *sin = (struct sockaddr_in *)ai->ai_addr;
+            s = evutil_inet_ntop(AF_INET, &sin->sin_addr, buf, 128);
+        } else if (ai->ai_family == AF_INET6) {
+            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)ai->ai_addr;
+            s = evutil_inet_ntop(AF_INET6, &sin6->sin6_addr, buf, 128);
+        }
+        if (s)
+            printf("    -> %s\n", s);
+    }
+    evutil_freeaddrinfo(addr);
+}
+
+void
+snip_lookup_target_dns(snip_pair_t *client, char *hostname, uint16_t port) {
+    struct evutil_addrinfo hints;
+    struct evdns_getaddrinfo_request *req;
+    struct user_data *user_data;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_flags = EVUTIL_AI_CANONNAME;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_protocol = IPPROTO_TCP;
+
+    client->dns_request = evdns_getaddrinfo(
+            client->context->dns_base, hostname, NULL, &hints, snip_lookup_target_dns_callback, (void*) client);
+}
+
 
 /**
  * Handle incoming data on the client-connection.
@@ -399,8 +449,6 @@ client_read_cb(
                                        handshake_data+offset+extension_server_name_offset,
                                        client->sni_hostname_length);
                                 extension_server_name_offset += client->sni_hostname_length;
-
-                                printf("SNI: (%d) %s\n", client->sni_hostname_length, client->sni_hostname);
                             }
                             extension_server_name_offset += extension_server_name_blob_length;
                         }
@@ -416,19 +464,19 @@ client_read_cb(
                 break;
             case snip_pair_state_sni_found:
                 // Ok, cool, lets make some progress.
-
+                snip_log(SNIP_LOG_LEVEL_DEBUG, "Found SNI '%s'\n", client->sni_hostname);
+                client->route = snip_get_target_from_sni_hostname(client->listener, client->sni_hostname);
                 break;
             case snip_pair_state_waiting_for_dns:
-                break;
             case snip_pair_state_waiting_for_connect:
+            case snip_pair_state_error_dns_failed:
+            case snip_pair_state_error_connect_failed:
+                // The work for these states is handled in separate event handlers.  We won't read any more off the
+                // buffer until we're proxying.
                 break;
             case snip_pair_state_proxying:
                 break;
             case snip_pair_state_sni_not_found:
-                break;
-            case snip_pair_state_error_dns_failed:
-                break;
-            case snip_pair_state_error_connect_failed:
                 break;
             case snip_pair_state_error_not_tls:
                 // So it looks like this isn't TLS, or at least isn't a version we know.  It may be that the client
@@ -448,25 +496,6 @@ client_read_cb(
                 break;
 
         }
-    }
-    if(!client->target_hostname) {
-        // We don't know the target_hostname yet, so we're trying to read the first line. If we don't have an EOL, let our input
-        // buffer keep growing.
-        // TODO - We should set a limit on how large we'll let the buffer grow.
-        // TODO - This will ultimately be switched to inspect the SNI, but lets avoid that complexity now.
-
-        char buffer[8];
-
-//        struct evbuffer_ptr eol_at = evbuffer_search_eol(input, NULL, NULL, EVBUFFER_EOL_CRLF);
-//        if(eol_at.pos != -1) {
-//            // Read in the target_hostname.
-//            client->target_hostname = evbuffer_readln(input,NULL, EVBUFFER_EOL_CRLF);
-//            // TODO - Validate the target_hostname.
-//            printf("Got target: %s\n", client->target_hostname);
-//        }
-    }
-    else {
-
     }
 
     /* Copy all the data from the input buffer to the output buffer. */
@@ -491,6 +520,11 @@ client_event_cb(
     if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
         bufferevent_free(bev);
         client->client_bev = NULL;
+        // Once target has been identified and we've begun to proxy data we drop our reference to the listener.
+        if(client->listener) {
+            snip_config_release(client->listener->config);
+            client->listener = NULL;
+        }
         snip_client_release(client);  // The target may still be out there.
     }
 }
@@ -516,6 +550,10 @@ snip_accept_incoming_cb(
 
     // Save it all to the pair
     snip_pair_t *client = snip_client_create();
+    snip_config_retain(listener->config);
+    client->listener = listener;
+    // We release the listener/config when we establish a destination. We still want to hold a way back to the context.
+    client->context = listener->config->context;
     client->client_bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
     bufferevent_setcb(client->client_bev, client_read_cb, NULL, client_event_cb, (void *) client);
 
@@ -559,8 +597,8 @@ SNIP_BOOLEAN
 snip_listen(snip_context_ref_t context, snip_config_t *config, snip_config_listener_t *listener) {
     memset(&(listener->socket_addr), 0, sizeof(listener->socket_addr));
     // We pass the config in directly instead of getting it from context because on a reload it hasn't been set yet.
-    listener->config = config;
-    snip_config_retain(config);
+    listener->config = snip_config_retain(config);
+
 
     listener->socket_addr.sin_family = AF_INET;
     listener->socket_addr.sin_addr.s_addr = htonl(0);
@@ -654,36 +692,14 @@ void * snip_run_network(void *ctx)
 void
 snip_shutdown_listener(evutil_socket_t fd, short events, void *ctx) {
     snip_config_listener_t *listener = (snip_config_listener_t *) ctx;
-    evconnlistener_free(listener->socket);
-    snip_config_release(listener->config);
+
 }
 
-/**
- * Reload the configuration file asynchronously.
- * @param context
- * @param argc - argument count from the command line.  If this is being built into another package, this can be 0
- *      provided the default config location is sufficient.
- * @param argv - argument strings from the command line.  If this is being build into another package, this can be NULL
- *      provided the default config location is sufficient.
- */
 void
-snip_reload_config(snip_context_ref_t context, int argc, char **argv) {
-    snip_config_t *old_config = context->config;
-
-    // Create and parse a new config.
-    snip_config_t *new_config = snip_config_create();
-    snip_config_retain(new_config);
-
-    if(argc && argv) {
-        snip_config_parse_args(new_config, argc, argv);
-    }
-    if(!new_config->config_path) {
-        new_config->config_path = SNIP_INSTALL_CONF_PATH;
-    }
-    if(!snip_parse_config_file(new_config)) {
-        snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG, "Invalid configuration file '%s'.", new_config->config_path);
-        return;
-    }
+snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
+    snip_config_t *new_config = (snip_config_t *) ctx;
+    snip_context_t *context = new_config->context;
+    snip_config_t *old_config = context->config; // May be NULL if this is the first config load.
 
     // We have a new config. We compare the old config to the new one because we don't want to shutdown and then reopen
     // sockets.  We copy the old socket onto the new config.
@@ -710,17 +726,9 @@ snip_reload_config(snip_context_ref_t context, int argc, char **argv) {
     old_listener = old_config ? old_config->listeners : NULL;
     while(old_listener) {
         if(old_listener->value.socket) {
-            // evconnlistener is reference counted and threadsafe provided we use the LEV_OPT_THREADSAFE flag.
-            event_base_once(
-                    context->event_base,
-                    -1,
-                    EV_TIMEOUT,
-                    snip_shutdown_listener,
-                    (void *) &(old_listener->value),
-                    NULL
-            );
-
-
+            evconnlistener_free(old_listener->value.socket);
+            // We won't be accepting any new connections.  In-progress connections retain the config individually.
+            snip_config_release(old_config);
             old_listener->value.socket = NULL;
         }
         old_listener = old_listener->next;
@@ -730,6 +738,36 @@ snip_reload_config(snip_context_ref_t context, int argc, char **argv) {
     if(old_config) {
         snip_config_release(old_config);
     }
+}
+
+/**
+ * Reload the configuration file asynchronously.
+ * @param context
+ * @param argc - argument count from the command line.  If this is being built into another package, this can be 0
+ *      provided the default config location is sufficient.
+ * @param argv - argument strings from the command line.  If this is being build into another package, this can be NULL
+ *      provided the default config location is sufficient.
+ */
+void
+snip_reload_config(snip_context_ref_t context, int argc, char **argv) {
+    snip_config_t *old_config = context->config;
+
+    // Create and parse a new config.
+    snip_config_t *new_config = snip_config_retain(snip_config_create());
+    new_config->context = context;
+
+    if(argc && argv) {
+        snip_config_parse_args(new_config, argc, argv);
+    }
+    if(!new_config->config_path) {
+        new_config->config_path = SNIP_INSTALL_CONF_PATH;
+    }
+    if(!snip_parse_config_file(new_config)) {
+        snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG, "Invalid configuration file '%s'.", new_config->config_path);
+        return;
+    }
+
+
 
     //int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
     //int evdns_base_resume(struct evdns_base *base);
@@ -743,6 +781,14 @@ void snip_run(snip_context_t *context)
 {
     snip_reload_config(context, context->argc, context->argv);
     pthread_cond_init(&(context->work_for_main_thread), NULL);
+
+    // We want the event thread to catch the signals
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, SIGQUIT);
+    sigaddset(&sigset, SIGHUP);
+    pthread_sigmask(SIG_BLOCK, &sigset, NULL);
+
     pthread_create(&(context->event_thread), NULL, snip_run_network, (void *) context);
     pthread_mutex_init(&(context->context_lock), NULL);
     pthread_mutex_lock(&(context->context_lock));

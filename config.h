@@ -75,8 +75,9 @@ snip_config_create();
 /**
  * Increase the reference count on the snip_config.
  * @param config
+ * @return - config parameter passed back so the "x = snip_config_retain(config);" pattern can be implemented.
  */
-void
+snip_config_t *
 snip_config_retain(snip_config_t *config);
 
 /**
@@ -87,12 +88,13 @@ void
 snip_config_release(snip_config_t *config);
 
 /**
- * Maps the SNI hostname into a destination hostname based upon configuration.
+ * Maps the SNI hostname into a destination route based upon configuration.
+ * @param listener
  * @param sni_hostname[in]
  * @return
  */
-char *
-snip_get_target_hostname_from_sni_hostname(char *sni_hostname);
+snip_config_route_t *
+snip_get_target_from_sni_hostname(snip_config_listener_t *listener, char *sni_hostname);
 
 
 
