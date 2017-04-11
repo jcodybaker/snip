@@ -102,7 +102,7 @@ snip_find_route_for_sni_hostname(snip_config_listener_t *listener, char *sni_hos
  * @param sni_hostname
  * @return
  */
-const char *
+char *
 snip_route_and_sni_hostname_to_target_hostname(snip_config_route_t *route, const char *sni_hostname);
 
 

@@ -84,13 +84,12 @@ typedef struct snip_pair_e {
     enum snip_socket_state_e client_state;
 
     enum snip_pair_state state;
-    size_t current_record_start;
-    uint16_t current_record_length;
-    uint32_t current_message_length;
+    size_t tls_current_record_start;
+    uint16_t tls_current_record_length;
+    uint32_t tls_current_message_length;
 
     struct evbuffer *handshake_buffer;
 
-    evutil_socket_t client_fd;
     struct sockaddr_storage client_address; // Hold the address locally in this structure.
     size_t client_address_len;
 
@@ -98,14 +97,13 @@ typedef struct snip_pair_e {
     enum snip_socket_state_e target_state;
 
     char *target_hostname;
-    evutil_socket_t target_fd;
+    uint16_t target_port;
     struct sockaddr_storage target_address; // Hold the address locally in this structure.
     size_t target_address_len;
+    char target_address_string[INET6_ADDRSTRLEN_WITH_PORT];
 
     uint16_t sni_hostname_length;
     char *sni_hostname;
-
-    int references;
 
     struct snip_TLS_version client_version;
 
@@ -159,6 +157,35 @@ snip_client_read_cb(
 );
 
 
+/**
+ * Convert a struct sockaddr to a string of the form "1.2.3.4:443" or its ipv6 equivilent.
+ * @param buffer - Buffer for storing the resulting string.  MUST be atleast INET6_ADDRSTRLEN_WITH_PORT.
+ * @param address
+ * @return
+ */
+int
+snip_sockaddr_to_string(char *buffer, struct sockaddr *address) {
+    char target_string[INET6_ADDRSTRLEN_WITH_PORT];
+    const char *ntop_result = evutil_inet_ntop(address->sa_family, address, target_string, INET6_ADDRSTRLEN_WITH_PORT);
+    if(!ntop_result) {
+        return -1;
+    }
+    uint16_t port;
+    if(address->sa_family == AF_INET) {
+        port = ((struct sockaddr_in *) address)->sin_port;
+    }
+    else if(address->sa_family == AF_INET6) {
+        port = ((struct sockaddr_in6 *) address)->sin6_port;
+    }
+    else {
+        return -1;
+    }
+    int string_result = snprintf(buffer, INET6_ADDRSTRLEN_WITH_PORT, "%s:%hu", target_string, port);
+    if(string_result <= 0 || (string_result + 1) > INET6_ADDRSTRLEN_WITH_PORT) {
+        return -1;
+    }
+    return string_result;
+}
 
 
 
@@ -187,11 +214,16 @@ snip_client_destroy(
     if(client->target_bev) {
         bufferevent_free(client->target_bev);
     }
+    if(client->handshake_buffer) {
+        evbuffer_free(client->handshake_buffer);
+    }
+    if(client->sni_hostname) {
+        free(client->sni_hostname);
+    }
     if(client->listener) {
         snip_config_release(client->listener->config);
         client->listener = NULL;
     }
-    // These are malloc'ed by libevent's evbuffer_readln function.
     if(client->target_hostname) {
         free(client->target_hostname);
     }
@@ -207,7 +239,7 @@ size_t
 snip_get_handshake_buffer_length(snip_pair_t *client) {
     // If the ClientHello is contained in a single TLS record, we can just borrow their buffer.
     if(!client->handshake_buffer) {
-        return client->current_record_length;
+        return client->tls_current_record_length;
     }
     return evbuffer_get_length(client->handshake_buffer);
 }
@@ -225,8 +257,8 @@ unsigned char *
 snip_get_handshake_buffer(snip_pair_t *client, struct evbuffer *input, size_t pullup, size_t *available) {
     // If the ClientHello is contained in a single TLS record, we can just borrow their buffer.
     if(!client->handshake_buffer) {
-        *available = client->current_record_length;
-        return evbuffer_pullup(input, client->current_record_length + SNIP_TLS_RECORD_HEADER_LENGTH) +
+        *available = client->tls_current_record_length;
+        return evbuffer_pullup(input, client->tls_current_record_length + SNIP_TLS_RECORD_HEADER_LENGTH) +
                SNIP_TLS_RECORD_HEADER_LENGTH;
     }
     *available = evbuffer_get_length(client->handshake_buffer);
@@ -279,6 +311,11 @@ snip_target_read_cb(
     struct evbuffer *input_from_target = bufferevent_get_input(bev);
     if(client->client_bev) {
         bufferevent_write_buffer(client->client_bev, input_from_target);
+    }
+    else {
+        // We close the read-stream when the matching output-buffer is gone, but that could still be pending.  Discard.
+        struct evbuffer *input = bufferevent_get_input(bev);
+        evbuffer_drain(input, evbuffer_get_length(input));
     }
 }
 
@@ -390,8 +427,24 @@ snip_target_event_cb(
     // TODO - Better log messages. It's unclear if we can get the resolved address
     // with bufferevent_socket_connect_hostname
     if(events & BEV_EVENT_CONNECTED) {
-        snip_log(SNIP_LOG_LEVEL_INFO, "Target connection succeeded.");
         client->target_state = snip_socket_state_connected;
+        int rv = getpeername(bufferevent_getfd(bev),
+                    (struct sockaddr *) &(client->target_address),
+                    (socklen_t *) &(client->target_address_len));
+        if(rv < 0 ||
+                (snip_sockaddr_to_string(client->target_address_string, (struct sockaddr *) &(client->target_address)) < 0))
+        {
+            // This should all be pretty safe, but JIC.
+            client->target_state = snip_socket_state_error;
+            snip_log(SNIP_LOG_LEVEL_WARNING, "Target connection succeeded but its address could not be decoded.");
+            snip_client_destroy(client);
+        }
+        snip_log(SNIP_LOG_LEVEL_INFO,
+                 "Target connection to '%s:%hu' (%s) succeeded.",
+                 client->target_hostname,
+                 client->target_port,
+                 client->target_address_string
+        );
     }
     else if (events & BEV_EVENT_ERROR) {
         int dns_error = bufferevent_socket_get_dns_error(bev);
@@ -447,92 +500,6 @@ snip_target_event_cb(
     }
 }
 
-/**
- * Callback for DNS resolution on the target address.
- * @param error_code
- * @param response
- * @param arg
- */
-void
-snip_lookup_target_dns_callback(int error_code, struct evutil_addrinfo *response, void *arg) {
-    snip_pair_t *client = (snip_pair_t *) arg;
-    if(error_code) {
-        snip_log(SNIP_LOG_LEVEL_WARNING,
-                 "Failed to resolve target '%s' for client: %s",
-                 client->route->dest_hostname,
-                 evutil_gai_strerror(error_code));
-        client->state = snip_pair_state_error_dns_failed;
-        return;
-    }
-    uint16_t port = snip_client_get_target_port(client);
-    struct evutil_addrinfo *address;
-    for (address = response; address; address = address->ai_next) {
-        char target_string[INET6_ADDRSTRLEN_WITH_PORT];
-        const char *ntop_result = NULL;
-        if (address->ai_family == AF_INET) {
-            memcpy(&(client->target), address->ai_addr, sizeof(struct sockaddr_in));
-            struct sockaddr_in *sin = (struct sockaddr_in *) &(client->target);
-            sin->sin_port = port;
-            ntop_result = evutil_inet_ntop(AF_INET, &sin->sin_addr, target_string, INET6_ADDRSTRLEN_WITH_PORT);
-        }
-        else if (address->ai_family == AF_INET6) {
-            memcpy(&(client->target), address->ai_addr, sizeof(struct sockaddr_in6));
-            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) &(client->target);
-            sin6->sin6_port = port;
-            ntop_result = evutil_inet_ntop(AF_INET6, &sin6->sin6_addr, target_string, INET6_ADDRSTRLEN_WITH_PORT);
-        }
-        else {
-            continue;
-        }
-
-        evutil_freeaddrinfo(response);
-
-        if (!ntop_result)
-        {
-            // Can't see why this would fail, but lets be safe.
-            snip_log(SNIP_LOG_LEVEL_CRITICAL, "Failed to encode target address for client.");
-            client->state = snip_pair_state_error_dns_failed;
-            return;
-        }
-        int string_result = snprintf(client->target_string,
-                 INET6_ADDRSTRLEN_WITH_PORT,
-                 "%s:%hu",
-                 target_string,
-                 port);
-        if(string_result <= 0 || (string_result + 1) > INET6_ADDRSTRLEN_WITH_PORT) {
-            // Can't see why this would fail, but lets be safe.
-            snip_log(SNIP_LOG_LEVEL_CRITICAL, "Failed to encode target address for client.");
-            client->state = snip_pair_state_error_dns_failed;
-            return;
-        }
-        // Time to move on.
-        snip_connect_to_target(client);
-        return;
-    }
-    // We only get here if there's no useful responses.
-    snip_log(SNIP_LOG_LEVEL_WARNING,
-             "Failed to resolve target '%s' for client: no results.",
-             client->route->dest_hostname
-    );
-    client->state = snip_pair_state_error_dns_failed;
-    evutil_freeaddrinfo(response);
-}
-
-void
-snip_lookup_target_dns(snip_pair_t *client, char *hostname, uint16_t port) {
-    struct evutil_addrinfo hints;
-    struct evdns_getaddrinfo_request *req;
-    struct user_data *user_data;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
-    hints.ai_flags = EVUTIL_AI_CANONNAME;
-    hints.ai_socktype = SOCK_STREAM;
-    hints.ai_protocol = IPPROTO_TCP;
-
-    client->dns_request = evdns_getaddrinfo(
-            client->context->dns_base, hostname, NULL, &hints, snip_lookup_target_dns_callback, (void*) client);
-}
-
 
 /**
  * Handle incoming data on the client-connection.
@@ -583,10 +550,10 @@ snip_client_read_cb(
                 // We can get the length of the current record, and the total length of the ClientHello message with
                 // fixed offsets from the beginning.  We can also verify that the versions and other fields match our
                 // expectations.
-                if ((available_input - client->current_record_start) < SNIP_TLS_RECORD_HEADER_LENGTH) {
+                if ((available_input - client->tls_current_record_start) < SNIP_TLS_RECORD_HEADER_LENGTH) {
                     return; // Come back when there's enough data.
                 }
-                buffer = evbuffer_pullup(input_from_client, client->current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH);
+                buffer = evbuffer_pullup(input_from_client, client->tls_current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH);
 
                 // This MUST be a handshake record.
                 if((buffer[0] != SNIP_TLS_RECORD_TYPE_HANDSHAKE))
@@ -607,9 +574,9 @@ snip_client_read_cb(
                 }
 
                 memcpy(&tmp16, buffer + 3, sizeof(uint16_t));
-                client->current_record_length = ntohs(tmp16);
+                client->tls_current_record_length = ntohs(tmp16);
 
-                if((client->current_record_length & 0x8000) || client->current_record_length == 0) {
+                if((client->tls_current_record_length & 0x8000) || client->tls_current_record_length == 0) {
                     // Max length is 2^14, can't be 0
                     client->state = snip_pair_state_error_protocol_violation;
                     break;
@@ -618,25 +585,25 @@ snip_client_read_cb(
                 break;
             case snip_pair_state_reading_record:
                 // libevent is handling the buffering so we'll pull out the whole record at once. Can't be > than 16k
-                offset = client->current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH;
-                if((available_input - offset) < client->current_record_length) {
+                offset = client->tls_current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH;
+                if((available_input - offset) < client->tls_current_record_length) {
                     // Wait for more input.
                     return;
                 }
 
                 buffer = evbuffer_pullup(
                         input_from_client,
-                        client->current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH + client->current_record_length
+                        client->tls_current_record_start + SNIP_TLS_RECORD_HEADER_LENGTH + client->tls_current_record_length
                 );
 
                 if(client->handshake_buffer) {
                     // This isn't the first record, add this record's data to the last so we can ultimately get a single
                     // concatenated message.
                     evbuffer_add(client->handshake_buffer,
-                                 buffer + client->current_record_start, client->current_record_length);
+                                 buffer + client->tls_current_record_start, client->tls_current_record_length);
                 }
 
-                if(!client->current_message_length) {
+                if(!client->tls_current_message_length) {
                     // We don't know how long the handshake message is yet.
                     handshake_data = snip_get_handshake_buffer(
                             client, input_from_client, SNIP_TLS_HANDSHAKE_HEADER_LENGTH, &available_handshake);
@@ -650,12 +617,12 @@ snip_client_read_cb(
                         memcpy(&tmp32, handshake_data, sizeof(uint32_t));
                         // Could be slower, but doesn't make assumptions about endianess that bit math does.
                         memset(&tmp32, '\0', SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH);
-                        client->current_message_length = ntohl(tmp32);
+                        client->tls_current_message_length = ntohl(tmp32);
                     }
                 }
 
                 available_handshake = snip_get_handshake_buffer_length(client);
-                if(client->current_message_length && (available_handshake >= client->current_message_length)) {
+                if(client->tls_current_message_length && (available_handshake >= client->tls_current_message_length)) {
                     // Ok, cool, we've got the whole ClientHello
                     client->state = snip_pair_state_have_client_hello;
                     break;
@@ -667,22 +634,22 @@ snip_client_read_cb(
                     client->handshake_buffer = evbuffer_new();
                     // If we know the size, pre-allocate.
                     evbuffer_expand(client->handshake_buffer,
-                                    MAX(client->current_message_length, client->current_record_length));
+                                    MAX(client->tls_current_message_length, client->tls_current_record_length));
                     evbuffer_add(client->handshake_buffer,
-                                 buffer + client->current_record_start, client->current_record_length);
+                                 buffer + client->tls_current_record_start, client->tls_current_record_length);
                 }
 
                 // Setup to read the next record.
-                client->current_record_start = client->current_record_start +
-                                               SNIP_TLS_RECORD_HEADER_LENGTH + client->current_record_length;
-                client->current_record_length = 0;
+                client->tls_current_record_start = client->tls_current_record_start +
+                                               SNIP_TLS_RECORD_HEADER_LENGTH + client->tls_current_record_length;
+                client->tls_current_record_length = 0;
 
                 client->state = snip_pair_state_record_header;
                 break;
             case snip_pair_state_have_client_hello:
                 // Done reading, just process.
                 handshake_data = snip_get_handshake_buffer(
-                        client, input_from_client, client->current_message_length, &available_handshake);
+                        client, input_from_client, client->tls_current_message_length, &available_handshake);
                 offset = SNIP_TLS_HANDSHAKE_HEADER_LENGTH; // We've already dealt with the header
                 client->client_version.major = *(handshake_data + offset);
                 client->client_version.minor = *(handshake_data + offset + 1);
@@ -811,17 +778,18 @@ snip_client_read_cb(
                 /* Copy all the data from the input buffer to the output buffer. */
                 bufferevent_write_buffer(client->target_bev, input_from_client);
 
+                client->target_port = snip_client_get_target_port(client);
+                client->target_hostname = snip_route_and_sni_hostname_to_target_hostname(
+                        client->route, client->sni_hostname);
+
                 if(bufferevent_socket_connect_hostname(
                         client->target_bev,
                         context->dns_base,
                         AF_UNSPEC,
-                        snip_route_and_sni_hostname_to_target_hostname(client->route, client->sni_hostname),
-                        snip_client_get_target_port(client)))
+                        client->target_hostname,
+                        client->target_port))
                 {
-                    snip_log(SNIP_LOG_LEVEL_WARNING,
-                             "Error opening a connection to '%s'.",
-                             snip_route_and_sni_hostname_to_target_hostname(client->route, client->sni_hostname)
-                    );
+                    snip_log(SNIP_LOG_LEVEL_WARNING, "Error opening a connection to '%s'.", client->target_hostname);
                     client->state = snip_pair_state_error_connect_failed;
                     break;
                 };
@@ -946,7 +914,6 @@ snip_accept_incoming_cb(
 
     memcpy((struct sockaddr *) &(client->client_address), address, socklen);
     client->client_address_len = (size_t) socklen;
-    client->client_fd = fd;
     client->client_state = snip_socket_state_connected;
 
     // Set it ready

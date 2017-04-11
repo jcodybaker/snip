@@ -861,9 +861,11 @@ snip_find_route_for_sni_hostname(snip_config_listener_t *listener, char *sni_hos
  * Given a route, get the hostname. We include the sni_hostname to help resolve regex parameters.
  * @param route
  * @param sni_hostname
- * @return
+ * @return - A freshly allocated string version of the hostname. You are responsible for freeing the result.
  */
-const char *
+char *
 snip_route_and_sni_hostname_to_target_hostname(snip_config_route_t *route, const char *sni_hostname) {
-    return route->dest_hostname;
+    char *hostname = malloc(strlen(route->dest_hostname));
+    strcpy(hostname, route->dest_hostname);
+    return hostname;
 }
