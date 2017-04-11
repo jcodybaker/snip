@@ -14,6 +14,7 @@ extern "C" {
 #define SNIP_EXIT_ERROR_GENERAL 1
 #define SNIP_EXIT_ERROR_INVALID_CONFIG 64
 #define SNIP_EXIT_ERROR_SOCKET 65
+#define SNIP_EXIT_ERROR_ASSERTION_FAILED 66
 
 // These are roughly borrowed from syslog, though we call it FATAL to avoid any confusion.
 // Goal is to make life easier if we want to switch to a logging library that implements a syslog style interface.

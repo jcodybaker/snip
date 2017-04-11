@@ -68,8 +68,8 @@ snip_config_route_list_destroy(snip_config_route_list_t *route_list) {
     if(route_list->next) {
         snip_config_route_list_destroy(route_list->next);
     }
-    free(route_list->value.dest_hostname);
-    free(route_list->value.sni_hostname);
+    free((void*) route_list->value.dest_hostname);
+    free((void*) route_list->value.sni_hostname);
     free(route_list);
 }
 
@@ -233,7 +233,7 @@ snip_parse_port(const char *port_string, uint16_t *port) {
  * @return true (1) if the parse was successful, false (0) otherwise.
  */
 SNIP_BOOLEAN
-snip_parse_target(const char *target, char **hostname, uint16_t *port) {
+snip_parse_target(const char *target, const char **hostname, uint16_t *port) {
     *hostname = NULL;
     const char *colon = strchr(target, ':');
     size_t hostname_length;
@@ -243,14 +243,14 @@ snip_parse_target(const char *target, char **hostname, uint16_t *port) {
             return 0;
         }
         *hostname = malloc(hostname_length + 1);
-        memset(*hostname, '\0', hostname_length + 1);
-        memcpy(*hostname, target, hostname_length);
+        memset((void*) *hostname, '\0', hostname_length + 1);
+        memcpy((void*) *hostname, target, hostname_length);
         return 1;
     }
     else {
         hostname_length = strlen(target) + 1;
         *hostname = malloc(hostname_length);
-        strcpy(*hostname, target);
+        strcpy((void*) *hostname, target);
         *port = 0;
         return 1;
     }
@@ -542,7 +542,7 @@ snip_parse_config_file(snip_config_t *config) {
                     route_item->next = current_route_item;
                 }
                 current_route_item->value.sni_hostname = malloc(event.data.scalar.length);
-                memcpy(current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
+                memcpy((void*) current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
                 // End of the dictionary.
@@ -650,7 +650,7 @@ snip_parse_config_file(snip_config_t *config) {
         else if (state == snip_config_parse_state_routes_list_map_sni_hostname_value) {
             if(event.type == YAML_SCALAR_EVENT) {
                 current_route_item->value.sni_hostname = malloc(event.data.scalar.length);
-                memcpy(current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
+                memcpy((void*) current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
                 state = snip_config_parse_state_routes_list_map;
             }
             else if (event.type != YAML_NO_EVENT) {
@@ -664,7 +664,7 @@ snip_parse_config_file(snip_config_t *config) {
         else if (state == snip_config_parse_state_routes_list_map_target_value) {
             if(event.type == YAML_SCALAR_EVENT) {
                 current_route_item->value.dest_hostname = malloc(event.data.scalar.length);
-                memcpy(current_route_item->value.dest_hostname, event.data.scalar.value, event.data.scalar.length);
+                memcpy((void*) current_route_item->value.dest_hostname, event.data.scalar.value, event.data.scalar.length);
                 state = snip_config_parse_state_routes_list_map;
             }
             else if (event.type != YAML_NO_EVENT) {
@@ -838,7 +838,7 @@ snip_route_matches(snip_config_route_t *route, char *sni_hostname) {
  * @return
  */
 snip_config_route_t *
-snip_get_target_from_sni_hostname(snip_config_listener_t *listener, char *sni_hostname) {
+snip_find_route_for_sni_hostname(snip_config_listener_t *listener, char *sni_hostname) {
     snip_config_t *config = listener->config;
     snip_config_route_list_t *route_item = listener->routes;
     while(route_item) {
@@ -855,4 +855,15 @@ snip_get_target_from_sni_hostname(snip_config_listener_t *listener, char *sni_ho
         route_item = route_item->next;
     }
     return listener->default_route ? listener->default_route : config->default_route;
+}
+
+/**
+ * Given a route, get the hostname. We include the sni_hostname to help resolve regex parameters.
+ * @param route
+ * @param sni_hostname
+ * @return
+ */
+const char *
+snip_route_and_sni_hostname_to_target_hostname(snip_config_route_t *route, const char *sni_hostname) {
+    return route->dest_hostname;
 }

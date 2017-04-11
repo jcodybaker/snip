@@ -19,8 +19,8 @@ extern "C" {
 // We want to keep the context anonymous to the outside.
 
 typedef struct snip_config_route {
-    char *sni_hostname;
-    char *dest_hostname;
+    const char *sni_hostname;
+    const char *dest_hostname;
     uint16_t port;
 } snip_config_route_t;
 
@@ -94,8 +94,16 @@ snip_config_release(snip_config_t *config);
  * @return
  */
 snip_config_route_t *
-snip_get_target_from_sni_hostname(snip_config_listener_t *listener, char *sni_hostname);
+snip_find_route_for_sni_hostname(snip_config_listener_t *listener, char *sni_hostname);
 
+/**
+ * Given a route, get the hostname. We include the sni_hostname to help resolve regex parameters.
+ * @param route
+ * @param sni_hostname
+ * @return
+ */
+const char *
+snip_route_and_sni_hostname_to_target_hostname(snip_config_route_t *route, const char *sni_hostname);
 
 
 /**
@@ -125,7 +133,7 @@ snip_parse_port(const char *port_string, uint16_t *port);
  * @return true (1) if the parse was successful, false (0) otherwise.
  */
 SNIP_BOOLEAN
-snip_parse_target(const char *target, char **hostname, uint16_t *port);
+snip_parse_target(const char *target, const char **hostname, uint16_t *port);
 
 /**
  * Parse the command line arguments and drop them into a configuration.
@@ -153,6 +161,7 @@ snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener
  */
 SNIP_BOOLEAN
 snip_listener_socket_is_equal(snip_config_listener_t *a, snip_config_listener_t *b);
+
 
 #ifdef __cplusplus
 }
