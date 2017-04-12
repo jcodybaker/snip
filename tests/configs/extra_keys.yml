@@ -3,15 +3,13 @@
 hello: world
 listeners:
 - extra_b: "asdf"
-  port: 443
   extra_a: "123"
-  bind: 0.0.0.0
+  bind: 0.0.0.0:443
   routes:
     - sni_hostname: "www.bing.com"
       target: "bing.com"
       target_port: 443
-- port: 8443
-  bind: 0.0.0.0
+- bind: 0.0.0.0:8443
   routes:
     "www.bing.com": "bing.com"
 routes:

@@ -2,15 +2,18 @@
 // Created by Cody Baker on 3/27/17.
 //
 
-#include "config.h"
-#include "log.h"
-#include "snip.h"
 
 #include <string.h>
 #include <stdlib.h>
 #include <getopt.h>
 #include <yaml.h>
 #include <pthread.h>
+
+
+#include "config.h"
+#include "log.h"
+#include "snip.h"
+#include "net_util.h"
 
 /**
  * Create a snip_config_t object.
@@ -282,7 +285,6 @@ snip_parse_config_file(snip_config_t *config) {
         snip_config_parse_state_initial = 0,
         snip_config_parse_state_root_map,
 
-        snip_config_parse_state_listener_port_rvalue,
         snip_config_parse_state_listener_bind_rvalue,
         snip_config_parse_state_routes_rvalue,
 
@@ -471,9 +473,6 @@ snip_parse_config_file(snip_config_t *config) {
                 if(!strcmp((const char *) event.data.scalar.value, "routes")) {
                     state = snip_config_parse_state_routes_rvalue;
                 }
-                else if(!strcmp((const char *) event.data.scalar.value, "port")) {
-                    state = snip_config_parse_state_listener_port_rvalue;
-                }
                 else if(!strcmp((const char *) event.data.scalar.value, "bind")) {
                     state = snip_config_parse_state_listener_bind_rvalue;
                 }
@@ -491,6 +490,14 @@ snip_parse_config_file(snip_config_t *config) {
                 }
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
+                // This listener is finishing.  Evaluate it for completeness.
+                if(current_listener_item->value.bind_address_string[0]) {
+                    snip_log_config(config,
+                                    &event,
+                                    SNIP_LOG_LEVEL_FATAL,
+                                    "'listener' items MUST include a valid 'bind' parameter.");
+                }
+                current_listener_item = NULL;
                 state = snip_config_parse_state_listeners_in_list;
             }
             else if (event.type != YAML_NO_EVENT) {
@@ -547,6 +554,12 @@ snip_parse_config_file(snip_config_t *config) {
                 memcpy((void*) current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
+                if(!current_route_item->value.dest_hostname || !current_route_item->value.sni_hostname) {
+                    snip_log_config(config,
+                                    &event,
+                                    SNIP_LOG_LEVEL_FATAL,
+                                    "'route' items MUST specify both a match and target.");
+                }
                 // End of the dictionary.
                 current_route_item = NULL;
                 state = current_listener_item ?
@@ -699,40 +712,79 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_state_error;
             }
         }
-        else if(state == snip_config_parse_state_listener_port_rvalue) {
+        else if(state == snip_config_parse_state_listener_bind_rvalue) {
+            const char *bind_message = "'listener' property 'bind' exports a non-zero port and optional bind address"
+                    " literal (ex. \"*:443\", \"0.0.0.0:443\", \"[::]:443\", \"[::1]:443\" or 443).";
             if(event.type == YAML_SCALAR_EVENT) {
-                if(!snip_parse_port((const char *) event.data.scalar.value, &(current_listener_item->value.bind_port)))
+                current_listener_item->value.bind_port = 0;
+                // This looks for the format "*:443" common in apache, etc.
+                if(((const char *) event.data.scalar.value)[0] == '*' &&
+                        ((const char *) event.data.scalar.value)[1] == ':' &&
+                        event.data.scalar.length <= 7)
                 {
-                    snip_log_config(config,
-                                    &event,
-                                    SNIP_LOG_LEVEL_FATAL,
-                                    "Invalid port specification '%s' for route ",
-                                    event.data.scalar.value);
+                    snip_parse_port(((const char *) event.data.scalar.value) + 2,
+                                        &(current_listener_item->value.bind_port));
+                }
+                else if(strchr((const char *) event.data.scalar.value, ':') ||
+                        strchr((const char *) event.data.scalar.value, '.'))
+                {
+                    // This looks like an IPv4/IPv6 literal.
+                    current_listener_item->value.bind_address_length = sizeof(current_listener_item->value.bind_address);
+                    if(evutil_parse_sockaddr_port((const char *) event.data.scalar.value,
+                                                   (struct sockaddr *) &(current_listener_item->value.bind_address),
+                                                   &(current_listener_item->value.bind_address_length)))
+                    {
+                        current_listener_item->value.bind_address_length = 0;
+                    }
+                    else {
+                        // Parsing the address was successful.  Pull out the port.
+                        if(current_listener_item->value.bind_address.ss_family == AF_INET) {
+                            struct sockaddr_in *sin = (struct sockaddr_in *) &(current_listener_item->value.bind_address);
+                            if(sin->sin_port) {
+                                current_listener_item->value.bind_port = ntohs(sin->sin_port);
+                            }
+                        }
+                        else if(current_listener_item->value.bind_address.ss_family == AF_INET6) {
+                            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) &(current_listener_item->value.bind_address);
+                            if(sin6->sin6_port) {
+                                current_listener_item->value.bind_port = ntohs(sin6->sin6_port);
+                            }
+                        }
+                        else {
+                            current_listener_item->value.bind_address_length = 0;
+                        }
+                    }
+                }
+                else
+                {
+                    snip_parse_port((const char *) event.data.scalar.value, &(current_listener_item->value.bind_port));
+                }
+
+                // We're done parsing.  Did we find a port?
+                if(!current_listener_item->value.bind_port) {
+                    snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, bind_message);
                     state = snip_config_parse_state_error;
                 }
                 else {
                     state = snip_config_parse_state_listener_item_map;
+                    if(current_listener_item->value.bind_address_length) {
+                        if(snip_sockaddr_to_string(current_listener_item->value.bind_address_string,
+                                                (struct sockaddr *) &(current_listener_item->value.bind_address)) < 0)
+                        {
+                            snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, bind_message);
+                            state = snip_config_parse_state_error;
+                        }
+                    }
+                    else {
+                        snprintf(current_listener_item->value.bind_address_string,
+                                 sizeof(current_listener_item->value.bind_address_string),
+                                 "*:%hu",
+                                 current_listener_item->value.bind_port);
+                    }
                 }
             }
             else if (event.type != YAML_NO_EVENT) {
-                snip_log_config(config,
-                                &event,
-                                SNIP_LOG_LEVEL_FATAL,
-                                "'listener' property 'port' expects an integer between 0 and 65535 ");
-                state = snip_config_parse_state_error;
-            }
-        }
-        else if(state == snip_config_parse_state_listener_bind_rvalue) {
-            if(event.type == YAML_SCALAR_EVENT) {
-                current_listener_item->value.bind_addr = malloc(event.data.scalar.length);
-                memcpy(current_listener_item->value.bind_addr, event.data.scalar.value, event.data.scalar.length);
-                state = snip_config_parse_state_listener_item_map;
-            }
-            else if (event.type != YAML_NO_EVENT) {
-                snip_log_config(config,
-                                &event,
-                                SNIP_LOG_LEVEL_FATAL,
-                                "'listener' property 'bind' expects a string value ");
+                snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, bind_message);
                 state = snip_config_parse_state_error;
             }
         }
@@ -766,16 +818,11 @@ snip_parse_config_file(snip_config_t *config) {
  */
 SNIP_BOOLEAN
 snip_listener_socket_is_equal(snip_config_listener_t *a, snip_config_listener_t *b) {
-    if(a->bind_port != b->bind_port) {
+    // Don't compare invalid listeners.
+    if(!(a->bind_address_string[0]) || !(a->bind_address_string[0])) {
         return FALSE;
     }
-    if(strcmp(a->bind_addr, b->bind_addr)) {
-        return FALSE;
-    }
-    if(a->ipv4 != b->ipv4 || a->ipv6 != b->ipv6) {
-        return FALSE;
-    }
-    return TRUE;
+    return !strcmp(a->bind_address_string, a->bind_address_string);
 }
 
 /**

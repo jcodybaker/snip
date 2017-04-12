@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
-#include <sys/socket.h>
+
 #include <signal.h>
 
 #include "config.h"
@@ -24,6 +24,7 @@
 #include "snip.h"
 #include "tls.h"
 #include "log.h"
+#include "net_util.h"
 
 #include <pthread.h>
 
@@ -45,6 +46,8 @@ typedef struct snip_context_e {
     char **argv;
 
     int shutting_down;
+
+    uint64_t next_id;
 } snip_context_t;
 
 enum snip_socket_state_e {
@@ -80,6 +83,9 @@ typedef struct snip_pair_e {
     struct bufferevent *client_bev;
     enum snip_socket_state_e client_state;
 
+    uint64_t id;
+    char *description;
+
     enum snip_pair_state state;
     size_t tls_current_record_start;
     uint16_t tls_current_record_length;
@@ -90,6 +96,8 @@ typedef struct snip_pair_e {
     struct sockaddr_storage client_address; // Hold the address locally in this structure.
     size_t client_address_length;
     char client_address_string[INET6_ADDRSTRLEN_WITH_PORT];
+
+    char client_local_address_string[INET6_ADDRSTRLEN_WITH_PORT];
 
     struct bufferevent *target_bev;
     enum snip_socket_state_e target_state;
@@ -153,48 +161,71 @@ snip_client_read_cb(
 );
 
 
+
 /**
- * Convert a struct sockaddr to a string of the form "1.2.3.4:443" or its ipv6 equivilent.
- * @param buffer - Buffer for storing the resulting string.  MUST be atleast INET6_ADDRSTRLEN_WITH_PORT.
- * @param address
- * @return
+ * Generate a description of the current connection state and store it in client->description.
+ * @param client
  */
-int
-snip_sockaddr_to_string(char *buffer, struct sockaddr *address) {
-    char target_string[INET6_ADDRSTRLEN_WITH_PORT];
-    const char *ntop_result;
-    uint16_t port;
-    if(address->sa_family == AF_INET) {
-        struct sockaddr_in *sin = (struct sockaddr_in *) address;
-        port = ntohs(sin->sin_port);
-        ntop_result = evutil_inet_ntop(address->sa_family,
-                                       (const void *) &(sin->sin_addr),
-                                       target_string,
-                                       INET6_ADDRSTRLEN_WITH_PORT
-        );
+void
+snip_pair_set_description(snip_pair_t *client) {
+    // This should only get longer each time, but lets be safe.
+    if(client->description) {
+        free(client->description);
+        client->description = NULL;
     }
-    else if(address->sa_family == AF_INET6) {
-        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) address;
-        port = ntohs(((struct sockaddr_in6 *) address)->sin6_port);
-        ntop_result = evutil_inet_ntop(address->sa_family,
-                                       (const void *) &(sin6->sin6_addr),
-                                       target_string,
-                                       INET6_ADDRSTRLEN_WITH_PORT
+    if(client->target_hostname) {
+        const char *format = "%016llX (%s->%s->%s:%hu)";
+        int needed = snprintf(NULL,
+                              0,
+                              format,
+                              client->id,
+                              client->client_address_string,
+                              client->client_local_address_string,
+                              client->target_hostname,
+                              client->target_port
         );
+        if(needed > 0) {
+            client->description = malloc((size_t) needed + 1);
+            memset(client->description, '\0', needed + 1);
+            needed = snprintf(client->description,
+                              needed + 1,
+                              format,
+                              client->id,
+                              client->client_address_string,
+                              client->client_local_address_string,
+                              client->target_hostname,
+                              client->target_port
+            );
+        }
+        if(needed < 0) {
+            snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "Error creating description.");
+        }
     }
     else {
-        return -1;
+        const char *format = "%016llX (%s->%s->!)";
+        int needed = snprintf(NULL,
+                 0,
+                 format,
+                 client->id,
+                 client->client_address_string,
+                 client->client_local_address_string
+        );
+        if(needed > 0) {
+            client->description = malloc((size_t) needed + 1);
+            memset(client->description, '\0', needed + 1);
+            needed = snprintf(client->description,
+                              needed + 1,
+                              format,
+                              client->id,
+                              client->client_address_string,
+                              client->client_local_address_string
+            );
+        }
+        if(needed < 0) {
+            snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "Error creating description.");
+        }
     }
-    if(!ntop_result) {
-        return -1;
-    }
-    int string_result = snprintf(buffer, INET6_ADDRSTRLEN_WITH_PORT, "%s:%hu", target_string, port);
-    if(string_result <= 0 || (string_result + 1) > INET6_ADDRSTRLEN_WITH_PORT) {
-        return -1;
-    }
-    return string_result;
 }
-
 
 
 /**
@@ -227,6 +258,9 @@ snip_client_destroy(
     }
     if(client->sni_hostname) {
         free(client->sni_hostname);
+    }
+    if(client->description) {
+        free(client->description);
     }
     if(client->listener) {
         snip_config_release(client->listener->config);
@@ -342,7 +376,7 @@ snip_shutdown_write_buffer_on_flushed(struct bufferevent *bev, void *ctx) {
     }
     else {
         // This shouldn't happen, but if it does we should know it does.
-        snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "Unexpected output-drained event.");
+        snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "%s: Unexpected output-drained event.", client->description);
         return;
     }
 
@@ -429,13 +463,15 @@ snip_target_event_cb(
         {
             // This should all be pretty safe, but JIC.
             client->target_state = snip_socket_state_error;
-            snip_log(SNIP_LOG_LEVEL_WARNING, "Target connection succeeded but its address could not be decoded.");
+            snip_log(SNIP_LOG_LEVEL_WARNING,
+                     "%s: Target connection succeeded but its address could not be decoded.",
+                     client->description
+            );
             snip_client_destroy(client);
         }
         snip_log(SNIP_LOG_LEVEL_INFO,
-                 "Target connection to '%s:%hu' (%s) succeeded.",
-                 client->target_hostname,
-                 client->target_port,
+                 "%s: Target connection to (%s) succeeded.",
+                 client->description,
                  client->target_address_string
         );
     }
@@ -443,14 +479,16 @@ snip_target_event_cb(
         int dns_error = bufferevent_socket_get_dns_error(bev);
         if(dns_error) {
             snip_log(SNIP_LOG_LEVEL_WARNING,
-                     "Target connection failed: DNS Error (%d) - %s",
+                     "%s: Unable to resolve target DNS: (%d) - %s.",
+                     client->description,
                      dns_error,
                      evutil_gai_strerror(dns_error));
         }
         else {
             int error_number = EVUTIL_SOCKET_ERROR();
             snip_log(SNIP_LOG_LEVEL_WARNING,
-                     "Target connection failed: Socket error (%d) - %s",
+                     "%s: Target connection socket error (%d) - %s.",
+                     client->description,
                      error_number,
                      evutil_socket_error_to_string(error_number)
             );
@@ -486,7 +524,10 @@ snip_target_event_cb(
         }
     }
     else if (events & BEV_EVENT_EOF) {
-        snip_log(SNIP_LOG_LEVEL_INFO, "Target connection: remote input ended");
+        snip_log(SNIP_LOG_LEVEL_INFO,
+                 "%s: Target ended input.",
+                 client->description
+        );
         client->target_state = snip_socket_state_input_eof;
         // Schedule any remaining target input for output
         if(client->client_bev) {
@@ -743,13 +784,9 @@ snip_client_read_cb(
                 break;
             case snip_pair_state_sni_found:
                 // Ok, cool, lets make some progress.
-                snip_log(SNIP_LOG_LEVEL_DEBUG, "Found SNI '%s'\n", client->sni_hostname);
+                snip_log(SNIP_LOG_LEVEL_DEBUG, "%s: Found SNI '%s'.", client->description, client->sni_hostname);
                 client->route = snip_find_route_for_sni_hostname(client->listener, client->sni_hostname);
                 if(!client->route) {
-                    snip_log(SNIP_LOG_LEVEL_INFO,
-                             "Unable to match SNI hostname '%s' to a route.",
-                             client->sni_hostname
-                    );
                     client->state = snip_pair_state_error_no_route;
                     break;
                 }
@@ -775,6 +812,7 @@ snip_client_read_cb(
                 client->target_port = snip_client_get_target_port(client);
                 client->target_hostname = snip_route_and_sni_hostname_to_target_hostname(
                         client->route, client->sni_hostname);
+                snip_pair_set_description(client);
 
                 if(bufferevent_socket_connect_hostname(
                         client->target_bev,
@@ -783,7 +821,10 @@ snip_client_read_cb(
                         client->target_hostname,
                         client->target_port))
                 {
-                    snip_log(SNIP_LOG_LEVEL_WARNING, "Error opening a connection to '%s'.", client->target_hostname);
+                    snip_log(SNIP_LOG_LEVEL_WARNING,
+                             "%s: Error opening target connection to '%s'.",
+                             client->description,
+                             client->target_hostname);
                     client->state = snip_pair_state_error_connect_failed;
                     return;
                 };
@@ -795,15 +836,15 @@ snip_client_read_cb(
                 return;
             case snip_pair_state_sni_not_found:
                 snip_log(SNIP_LOG_LEVEL_WARNING,
-                         "Client connection (%s) did not have an SNI record.",
-                         client->client_address_string
+                         "%s: Client connection did not have an SNI record.",
+                         client->description
                 );
                 snip_client_destroy(client);
                 return;
             case snip_pair_state_error_no_route:
                 snip_log(SNIP_LOG_LEVEL_WARNING,
-                         "Client connection (%s) - Could not map SNI record '%s'.",
-                         client->client_address_string,
+                         "%s: Client connection could not map SNI record '%s'.",
+                         client->description,
                          client->sni_hostname
                 );
                 snip_client_destroy(client);
@@ -819,29 +860,37 @@ snip_client_read_cb(
                 }
                 else {
                     snip_log(SNIP_LOG_LEVEL_WARNING,
-                             "Client connection (%s) - Connection does not look like TLS.",
-                             client->client_address_string
+                             "%s: Connection does not look like TLS.",
+                             client->description
                     );
                     snip_client_destroy(client);
                     return;
                 }
                 break;
             case snip_pair_state_error_protocol_violation:
+                snip_log(SNIP_LOG_LEVEL_WARNING,
+                         "%s: Client connection TLS protocol violated. Disconnected.",
+                         client->description
+                );
+                snip_client_destroy(client);
+                return;
             case snip_pair_state_error_invalid_tls_version:
                 snip_log(SNIP_LOG_LEVEL_WARNING,
-                         "Client connection (%s) - Protocol violated. Disconnected.",
-                         client->client_address_string
+                         "%s: Client connection SSL/TLS version not supported. Disconnected.",
+                         client->description
                 );
                 snip_client_destroy(client);
                 return;
             case snip_pair_state_error_found_http:
                 snip_log(SNIP_LOG_LEVEL_WARNING,
-                         "Client connection (%s) - Connection looks like HTTP instead of TLS.",
-                         client->client_address_string
+                         "%s: Client connection looks like HTTP instead of TLS.",
+                         client->description
                 );
                 snip_client_destroy(client);
                 return;
-
+            case snip_pair_state_error_connect_failed:
+                snip_client_destroy(client);
+                return;
         }
     }
 }
@@ -863,7 +912,8 @@ snip_client_event_cb(
     if (events & BEV_EVENT_ERROR) {
         int error_number = EVUTIL_SOCKET_ERROR();
         snip_log(SNIP_LOG_LEVEL_WARNING,
-                 "Client connection failed: Socket error (%d) - %s",
+                 "%s: Client connection failed: Socket error (%d) - %s.",
+                 client->description,
                  error_number,
                  evutil_socket_error_to_string(error_number)
         );
@@ -892,7 +942,7 @@ snip_client_event_cb(
         }
     }
     else if (events & BEV_EVENT_EOF) {
-        snip_log(SNIP_LOG_LEVEL_INFO, "Client connection (%s): remote input ended.", client->client_address_string);
+        snip_log(SNIP_LOG_LEVEL_INFO, "%s: Client connection input ended.", client->description);
         client->client_state = snip_socket_state_input_eof;
         // Schedule any remaining client input for output
         if(client->target_bev) {
@@ -919,20 +969,28 @@ snip_accept_incoming_cb(
 ) {
     struct event_base *base = evconnlistener_get_base(evconn);
     snip_config_listener_t *listener = (snip_config_listener_t *) ctx;
+    snip_context_t *context = listener->config->context;
 
     // Save it all to the pair
     snip_pair_t *client = snip_client_create();
     snip_config_retain(listener->config);
+    client->id = context->next_id++;
     client->listener = listener;
     // We release the listener/config when we establish a destination. We still want to hold a way back to the context.
     client->context = listener->config->context;
     client->client_bev = bufferevent_socket_new(base, fd, BEV_OPT_CLOSE_ON_FREE);
     bufferevent_setcb(client->client_bev, snip_client_read_cb, NULL, snip_client_event_cb, (void *) client);
 
+    memcpy(client->client_local_address_string,
+           listener->bind_address_string,
+           sizeof(client->client_local_address_string));
     memcpy((struct sockaddr *) &(client->client_address), address, socklen);
     client->client_address_length = (size_t) socklen;
     snip_sockaddr_to_string(client->client_address_string, address);
-    snip_log(SNIP_LOG_LEVEL_DEBUG, "Client connection: new '%s'.", client->client_address_string);
+
+    snip_pair_set_description(client);
+
+    snip_log(SNIP_LOG_LEVEL_DEBUG, "%s: Connection accepted.", client->description);
     client->client_state = snip_socket_state_connected;
 
     // Set it ready
@@ -952,7 +1010,8 @@ snip_accept_error_cb(struct evconnlistener *evconn, void *ctx)
     int err = EVUTIL_SOCKET_ERROR();
     snip_log_fatal(
             SNIP_EXIT_ERROR_SOCKET,
-            "An error occurred while setting up a listener: (%d) %s",
+            "An error occurred while setting up a listener (%s): (%d) %s.",
+            listener->bind_address_string,
             err,
             evutil_socket_error_to_string(err)
     );
@@ -988,7 +1047,8 @@ snip_listen(snip_context_ref_t context, snip_config_t *config, snip_config_liste
     if (!listener->socket) {
         snip_config_release(config);
         snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
-                       "Failed to open socket: %s",
+                       "Failed to open socket (%s): %s.",
+                       listener->bind_address_string,
                        strerror(errno)
         );
         return FALSE;
@@ -1017,6 +1077,11 @@ snip_context_init(snip_context_t *context, int argc, char **argv) {
     context->argv = argv;
     // right now we only support pthreads.  Windows threads are TODO.
     evthread_use_pthreads();
+
+    // We identify each connection with a 64-bit id.  To reduce  confusion between executions we randomize the initial.
+    evutil_secure_rng_init();
+    evutil_secure_rng_get_bytes(&(context->next_id), sizeof(context->next_id));
+
     context->event_base = event_base_new();
     context->dns_base = evdns_base_new(context->event_base, 1);
 

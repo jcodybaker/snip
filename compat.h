@@ -24,9 +24,9 @@
 #ifndef SNIP_BOOLEAN
 #define SNIP_BOOLEAN int
 #endif
-
-// INET6_ADDRSTRLEN is 46 bytes, colon separator 1, 5 bytes for the port, and 1 for the null terminator
-#define INET6_ADDRSTRLEN_WITH_PORT 52
+// IPv6 addresses get [] around the literal ip when a port is specified.  This keeps the port separate.
+// INET6_ADDRSTRLEN is 46 bytes, [] 2, colon separator 1, 5 bytes for the port, and 1 for the null terminator
+#define INET6_ADDRSTRLEN_WITH_PORT 54
 
 #ifndef SHUT_RD
 // Windows defines SD_RECEIVE instead of SHUT_RD, values are the same though.

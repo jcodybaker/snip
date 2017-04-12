@@ -32,7 +32,9 @@ typedef struct snip_config_route_list {
 typedef struct snip_config_listener_e {
     int ipv4;
     int ipv6;
-    char *bind_addr;
+    char bind_address_string[INET6_ADDRSTRLEN_WITH_PORT];
+    struct sockaddr_storage bind_address;
+    int bind_address_length;
     uint16_t bind_port;
 
     snip_config_route_list_t *routes;
