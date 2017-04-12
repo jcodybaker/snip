@@ -90,7 +90,7 @@ typedef struct snip_pair_e {
     struct evbuffer *handshake_buffer;
 
     struct sockaddr_storage client_address; // Hold the address locally in this structure.
-    size_t client_address_len;
+    size_t client_address_length;
     char client_address_string[INET6_ADDRSTRLEN_WITH_PORT];
 
     struct bufferevent *target_bev;
@@ -109,9 +109,7 @@ typedef struct snip_pair_e {
 
     snip_config_listener_t *listener;
     snip_config_route_t *route;
-    struct sockaddr_storage target;
-    char target_string[INET6_ADDRSTRLEN_WITH_PORT];
-    evutil_socket_t target_socket;
+
     snip_context_t *context;
 
     struct evdns_getaddrinfo_request *dns_request;
@@ -167,10 +165,6 @@ int
 snip_sockaddr_to_string(char *buffer, struct sockaddr *address) {
     char target_string[INET6_ADDRSTRLEN_WITH_PORT];
     const char *ntop_result;
-
-    if(!ntop_result) {
-        return -1;
-    }
     uint16_t port;
     if(address->sa_family == AF_INET) {
         struct sockaddr_in *sin = (struct sockaddr_in *) address;
@@ -191,6 +185,9 @@ snip_sockaddr_to_string(char *buffer, struct sockaddr *address) {
         );
     }
     else {
+        return -1;
+    }
+    if(!ntop_result) {
         return -1;
     }
     int string_result = snprintf(buffer, INET6_ADDRSTRLEN_WITH_PORT, "%s:%hu", target_string, port);
@@ -290,24 +287,6 @@ snip_client_get_target_port(snip_pair_t *client) {
         return client->route->port;
     }
     return client->listener->bind_port;
-}
-
-/**
- * Start the process of connecting to the target.
- * @param client
- */
-void
-snip_connect_to_target(snip_pair_t *client) {
-    struct sockaddr *address = (struct sockaddr *) &(client->target);
-    client->target_socket = socket(address->sa_family, SOCK_STREAM, IPPROTO_TCP);
-    evutil_make_socket_nonblocking(client->target_socket);
-    if(address->sa_family == AF_INET) {
-        struct sockaddr_in *address4 = (struct sockaddr_in *) &(client->target);
-
-    }
-    else if (address->sa_family == AF_INET6) {
-        struct sockaddr_in6 *address6 = (struct sockaddr_in6 *) &(client->target);
-    }
 }
 
 /**
@@ -533,11 +512,8 @@ snip_client_read_cb(
     snip_context_t *context = client->context;
 
     struct evbuffer *input_from_client = bufferevent_get_input(bev);
-    struct evbuffer *output_to_client = bufferevent_get_output(bev);
-
 
     size_t available_input = evbuffer_get_length(input_from_client);
-    size_t available_record = 0;
     size_t available_handshake = 0;
 
     uint16_t extension_server_name_length;
@@ -930,7 +906,7 @@ snip_accept_incoming_cb(
     bufferevent_setcb(client->client_bev, snip_client_read_cb, NULL, snip_client_event_cb, (void *) client);
 
     memcpy((struct sockaddr *) &(client->client_address), address, socklen);
-    client->client_address_len = (size_t) socklen;
+    client->client_address_length = (size_t) socklen;
     snip_sockaddr_to_string(client->client_address_string, address);
     snip_log(SNIP_LOG_LEVEL_DEBUG, "Client connection: new '%s'.", client->client_address_string);
     client->client_state = snip_socket_state_connected;
@@ -1077,6 +1053,10 @@ snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
     snip_context_t *context = new_config->context;
     snip_config_t *old_config = context->config; // May be NULL if this is the first config load.
 
+    // TODO - do we need to futz with the dns_base?
+    //int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
+    //int evdns_base_resume(struct evdns_base *base);
+
     // We have a new config. We compare the old config to the new one because we don't want to shutdown and then reopen
     // sockets.  We copy the old socket onto the new config.
     snip_config_listener_list_t *new_listener = new_config->listeners;
@@ -1145,10 +1125,6 @@ snip_reload_config(snip_context_ref_t context, int argc, char **argv) {
 
     // Apply the config inside the event loop.
     event_base_once(context->event_base, -1, EV_TIMEOUT, snip_replace_config, (void *) new_config, NULL);
-
-
-    //int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
-    //int evdns_base_resume(struct evdns_base *base);
 }
 
 
