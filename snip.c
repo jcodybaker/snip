@@ -70,10 +70,8 @@ enum snip_pair_state {
     snip_pair_state_have_client_hello,
     snip_pair_state_sni_found,
     snip_pair_state_sni_not_found,
-    snip_pair_state_waiting_for_dns,
     snip_pair_state_waiting_for_connect,
     snip_pair_state_proxying,
-    snip_pair_state_error_dns_failed,
     snip_pair_state_error_connect_failed,
     snip_pair_state_error_no_route
 };
@@ -419,7 +417,10 @@ snip_target_event_cb(
     // TODO - Better log messages. It's unclear if we can get the resolved address
     // with bufferevent_socket_connect_hostname
     if(events & BEV_EVENT_CONNECTED) {
+        client->state = snip_pair_state_proxying;
         client->target_state = snip_socket_state_connected;
+
+        client->target_address_len = sizeof(struct sockaddr_storage);
         int rv = getpeername(bufferevent_getfd(bev),
                     (struct sockaddr *) &(client->target_address),
                     (socklen_t *) &(client->target_address_len));
@@ -752,6 +753,7 @@ snip_client_read_cb(
                     client->state = snip_pair_state_error_no_route;
                     break;
                 }
+                client->target_state = snip_socket_state_connecting;
                 client->target_bev = bufferevent_socket_new(context->event_base, -1, BEV_OPT_CLOSE_ON_FREE);
 
                 // Ok we have what we need from the listener.
@@ -765,6 +767,7 @@ snip_client_read_cb(
                         snip_target_event_cb,
                         (void*) client
                 );
+                bufferevent_enable(client->target_bev, EV_READ|EV_WRITE);
 
                 /* Copy all the data from the input buffer to the output buffer. */
                 bufferevent_write_buffer(client->target_bev, input_from_client);
@@ -782,24 +785,29 @@ snip_client_read_cb(
                 {
                     snip_log(SNIP_LOG_LEVEL_WARNING, "Error opening a connection to '%s'.", client->target_hostname);
                     client->state = snip_pair_state_error_connect_failed;
-                    break;
+                    return;
                 };
-                client->state = snip_pair_state_proxying;
-                break;
-            case snip_pair_state_waiting_for_dns:
+                client->state = snip_pair_state_waiting_for_connect;
+                return;
             case snip_pair_state_waiting_for_connect:
-            case snip_pair_state_error_dns_failed:
-            case snip_pair_state_error_connect_failed:
-                // The work for these states is handled in separate event handlers.  We won't read any more off the
-                // buffer until we're proxying.
-                break;
             case snip_pair_state_proxying:
                 bufferevent_write_buffer(client->target_bev, input_from_client);
-                break;
+                return;
             case snip_pair_state_sni_not_found:
-                break;
+                snip_log(SNIP_LOG_LEVEL_WARNING,
+                         "Client connection (%s) did not have an SNI record.",
+                         client->client_address_string
+                );
+                snip_client_destroy(client);
+                return;
             case snip_pair_state_error_no_route:
-                break;
+                snip_log(SNIP_LOG_LEVEL_WARNING,
+                         "Client connection (%s) - Could not map SNI record '%s'.",
+                         client->client_address_string,
+                         client->sni_hostname
+                );
+                snip_client_destroy(client);
+                return;
             case snip_pair_state_error_not_tls:
                 // So it looks like this isn't TLS, or at least isn't a version we know.  It may be that the client
                 // connected with HTTP, in which case we can at least provide a helpful error. Apache does something
@@ -809,16 +817,32 @@ snip_client_read_cb(
                     client->state = snip_pair_state_error_found_http;
                     break;
                 }
+                else {
+                    snip_log(SNIP_LOG_LEVEL_WARNING,
+                             "Client connection (%s) - Connection does not look like TLS.",
+                             client->client_address_string
+                    );
+                    snip_client_destroy(client);
+                    return;
+                }
                 break;
             case snip_pair_state_error_protocol_violation:
             case snip_pair_state_error_invalid_tls_version:
-                printf("Error\n");
-                break;
+                snip_log(SNIP_LOG_LEVEL_WARNING,
+                         "Client connection (%s) - Protocol violated. Disconnected.",
+                         client->client_address_string
+                );
+                snip_client_destroy(client);
+                return;
             case snip_pair_state_error_found_http:
-                break;
+                snip_log(SNIP_LOG_LEVEL_WARNING,
+                         "Client connection (%s) - Connection looks like HTTP instead of TLS.",
+                         client->client_address_string
+                );
+                snip_client_destroy(client);
+                return;
 
         }
-        break;
     }
 }
 
@@ -868,7 +892,7 @@ snip_client_event_cb(
         }
     }
     else if (events & BEV_EVENT_EOF) {
-        snip_log(SNIP_LOG_LEVEL_INFO, "Target connection: remote input ended.");
+        snip_log(SNIP_LOG_LEVEL_INFO, "Client connection (%s): remote input ended.", client->client_address_string);
         client->client_state = snip_socket_state_input_eof;
         // Schedule any remaining client input for output
         if(client->target_bev) {
