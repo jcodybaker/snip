@@ -819,7 +819,7 @@ snip_parse_config_file(snip_config_t *config) {
 SNIP_BOOLEAN
 snip_listener_socket_is_equal(snip_config_listener_t *a, snip_config_listener_t *b) {
     // Don't compare invalid listeners.
-    if(!(a->bind_address_string[0]) || !(a->bind_address_string[0])) {
+    if(!(a->bind_address_string[0]) || !(b->bind_address_string[0])) {
         return FALSE;
     }
     return !strcmp(a->bind_address_string, a->bind_address_string);
