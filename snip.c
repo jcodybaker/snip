@@ -30,6 +30,8 @@
 
 const struct timeval snip_shutdown_timeout = {5, 0};
 
+int snip_should_reload = 0;
+
 typedef struct snip_context_e {
     snip_config_t *config;
     struct evdns_base *dns_base;
@@ -38,9 +40,6 @@ typedef struct snip_context_e {
     pthread_t event_thread;
     pthread_cond_t work_for_main_thread;
     pthread_mutex_t context_lock;
-
-    struct event *hup_event;
-    int pending_reload;
 
     int argc;
     char **argv;
@@ -92,6 +91,7 @@ typedef struct snip_pair_e {
 
     struct sockaddr_storage client_address; // Hold the address locally in this structure.
     size_t client_address_len;
+    char client_address_string[INET6_ADDRSTRLEN_WITH_PORT];
 
     struct bufferevent *target_bev;
     enum snip_socket_state_e target_state;
@@ -166,16 +166,29 @@ snip_client_read_cb(
 int
 snip_sockaddr_to_string(char *buffer, struct sockaddr *address) {
     char target_string[INET6_ADDRSTRLEN_WITH_PORT];
-    const char *ntop_result = evutil_inet_ntop(address->sa_family, address, target_string, INET6_ADDRSTRLEN_WITH_PORT);
+    const char *ntop_result;
+
     if(!ntop_result) {
         return -1;
     }
     uint16_t port;
     if(address->sa_family == AF_INET) {
-        port = ((struct sockaddr_in *) address)->sin_port;
+        struct sockaddr_in *sin = (struct sockaddr_in *) address;
+        port = ntohs(sin->sin_port);
+        ntop_result = evutil_inet_ntop(address->sa_family,
+                                       (const void *) &(sin->sin_addr),
+                                       target_string,
+                                       INET6_ADDRSTRLEN_WITH_PORT
+        );
     }
     else if(address->sa_family == AF_INET6) {
-        port = ((struct sockaddr_in6 *) address)->sin6_port;
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) address;
+        port = ntohs(((struct sockaddr_in6 *) address)->sin6_port);
+        ntop_result = evutil_inet_ntop(address->sa_family,
+                                       (const void *) &(sin6->sin6_addr),
+                                       target_string,
+                                       INET6_ADDRSTRLEN_WITH_PORT
+        );
     }
     else {
         return -1;
@@ -496,7 +509,9 @@ snip_target_event_cb(
         snip_log(SNIP_LOG_LEVEL_INFO, "Target connection: remote input ended");
         client->target_state = snip_socket_state_input_eof;
         // Schedule any remaining target input for output
-        snip_client_finish_writing(client);
+        if(client->client_bev) {
+            snip_client_finish_writing(client);
+        }
     }
 }
 
@@ -877,10 +892,12 @@ snip_client_event_cb(
         }
     }
     else if (events & BEV_EVENT_EOF) {
-        snip_log(SNIP_LOG_LEVEL_INFO, "Target connection: remote input ended");
+        snip_log(SNIP_LOG_LEVEL_INFO, "Target connection: remote input ended.");
         client->client_state = snip_socket_state_input_eof;
         // Schedule any remaining client input for output
-        snip_target_finish_writing(client);
+        if(client->target_bev) {
+            snip_target_finish_writing(client);
+        }
     }
 }
 
@@ -914,6 +931,8 @@ snip_accept_incoming_cb(
 
     memcpy((struct sockaddr *) &(client->client_address), address, socklen);
     client->client_address_len = (size_t) socklen;
+    snip_sockaddr_to_string(client->client_address_string, address);
+    snip_log(SNIP_LOG_LEVEL_DEBUG, "Client connection: new '%s'.", client->client_address_string);
     client->client_state = snip_socket_state_connected;
 
     // Set it ready
@@ -1017,21 +1036,23 @@ void snip_sigint_handler(evutil_socket_t fd, short events, void *arg) {
     }
 }
 
-void snip_sighup_handler(evutil_socket_t fd, short events, void *arg) {
-    snip_context_t *context = (snip_context_t *) arg;
-    pthread_mutex_lock(&(context->context_lock));
-    if(!context->pending_reload) {
-        context->pending_reload = 1;
-        pthread_cond_signal(&(context->work_for_main_thread));
-        pthread_mutex_unlock(&(context->context_lock));
-    }
+static void snip_sighup_handler(int signal, siginfo_t *info, void *ctx ) {
+    snip_context_t *context = (snip_context_t *) ctx;
+    snip_should_reload = 1;
 }
 
 void * snip_run_network(void *ctx)
 {
     snip_context_t *context = (snip_context_t *) ctx;
-    evsignal_new(context->event_base, SIGHUP, snip_sighup_handler, (void *) context);
-    evsignal_new(context->event_base, SIGINT, snip_sigint_handler, (void *) context);
+
+    sigset_t sigset;
+    sigemptyset(&sigset);
+    sigaddset(&sigset, SIGQUIT);
+    sigaddset(&sigset, SIGHUP);
+    pthread_sigmask(SIG_BLOCK, &sigset, NULL);
+
+    //evsignal_new(context->event_base, SIGHUP, snip_sighup_handler, (void *) context);
+    //evsignal_new(context->event_base, SIGINT, snip_sigint_handler, (void *) context);
     event_base_dispatch(context->event_base);
     return NULL;
 }
@@ -1122,11 +1143,14 @@ snip_reload_config(snip_context_ref_t context, int argc, char **argv) {
         return;
     }
 
+    // Apply the config inside the event loop.
+    event_base_once(context->event_base, -1, EV_TIMEOUT, snip_replace_config, (void *) new_config, NULL);
 
 
     //int evdns_base_clear_nameservers_and_suspend(struct evdns_base *base);
     //int evdns_base_resume(struct evdns_base *base);
 }
+
 
 /**
  * Read the configuration and start handling requests.
@@ -1136,24 +1160,24 @@ void snip_run(snip_context_t *context)
 {
     snip_reload_config(context, context->argc, context->argv);
     pthread_cond_init(&(context->work_for_main_thread), NULL);
-
-    // We want the event thread to catch the signals
-    sigset_t sigset;
-    sigemptyset(&sigset);
-    sigaddset(&sigset, SIGQUIT);
-    sigaddset(&sigset, SIGHUP);
-    pthread_sigmask(SIG_BLOCK, &sigset, NULL);
-
-    pthread_create(&(context->event_thread), NULL, snip_run_network, (void *) context);
     pthread_mutex_init(&(context->context_lock), NULL);
     pthread_mutex_lock(&(context->context_lock));
+
+    snip_should_reload = 0;
+    struct sigaction sighup_action;
+    memset(&sighup_action, '\0', sizeof(struct sigaction));
+    sighup_action.sa_sigaction = snip_sighup_handler;
+    sighup_action.sa_flags = SA_SIGINFO;
+    sigaction(SIGHUP, &sighup_action, NULL);
+
+    pthread_create(&(context->event_thread), NULL, snip_run_network, (void *) context);
     while(1) {
         pthread_cond_wait(&(context->work_for_main_thread), &(context->context_lock));
         if(context->shutting_down) {
             break;
         }
-        if(context->pending_reload) {
-            context->pending_reload = 0;
+        if(snip_should_reload) {
+            snip_should_reload = 0;
             pthread_mutex_unlock(&(context->context_lock));
             snip_reload_config(context, context->argc, context->argv);
             pthread_mutex_lock(&(context->context_lock));
