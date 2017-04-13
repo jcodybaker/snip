@@ -27,7 +27,7 @@ the proxy relays the handshake and encrypted data, but is not a party to the une
 ## Use Cases
 
 ### Mixed Platform HTTPS Hosting
-
+![Mixed Platform Network Diagram](docs/MixedPlatformDiagram.png)
 
 ## Todo
 
