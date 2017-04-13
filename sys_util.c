@@ -132,24 +132,20 @@ drop_privileges(uid_t uid, gid_t gid) {
     gid_t current_gid = getgid();
 
     // We drop ancillary groups either way.
-    if(!setgroups(1, &gid)) {
-        printf("setgroups(1, &gid (%u))\n", gid);
+    if(setgroups(1, &gid) == -1) {
         return FALSE;
     }
 
     if (gid != current_gid) {
 #ifdef __linux__
         if (setregid(gid, gid) == -1) {
-            printf("setregid(gid, gid) == -1\n");
             return FALSE;
         }
 #else
         if (setegid(gid) == -1) {
-            printf("setegid(gid) == -1\n");
             return FALSE;
         }
         if (setgid(gid) == -1) {
-            printf("setgid(gid) == -1\n");
             return FALSE;
         };
 #endif
@@ -158,17 +154,20 @@ drop_privileges(uid_t uid, gid_t gid) {
     if(uid != current_uid) {
 #ifdef __linux__
         if (setreuid(uid, uid) == -1) {
-            printf("setreuid(uid, uid) == -1\n");
             return FALSE;
         };
 #else
-        if (seteuid(uid) != -1) {
-            printf("seteuid(uid) != -1\n");
+        if (seteuid(uid) == -1) {
             return FALSE;
         }
         if (setuid(uid) == -1) {
-            printf("setuid(uid) == -1\n");
-            return FALSE;
+            // On OS-X it seems we can't setuid if we've already dropped with seteuid.  Set it back, then drop and
+            // verify.
+            seteuid(current_uid);
+            if (setuid(uid) == -1 || geteuid() != uid) {
+                return FALSE;
+            }
+
         }
 #endif
     }
@@ -176,11 +175,9 @@ drop_privileges(uid_t uid, gid_t gid) {
     // Check to make sure this is actually different. Try to change again. We can only change if we're privileged.  That
     // means we can't change twice in a row.
     if (gid != current_gid && (setegid(current_gid) != -1 || getegid() != gid)) {
-        printf("gid != current_gid && (setegid(current_gid) != -1 || getegid() != gid)\n");
         return FALSE;
     }
     if (uid != current_uid && (seteuid(current_uid) != -1 || geteuid() != uid)) {
-        printf("uid != current_uid && (seteuid(current_uid) != -1 || geteuid() != uid)\n");
         return FALSE;
     }
     return TRUE;
