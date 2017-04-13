@@ -8,12 +8,14 @@
 #include <getopt.h>
 #include <yaml.h>
 #include <pthread.h>
+#include <pwd.h>
 
 
 #include "config.h"
 #include "log.h"
 #include "snip.h"
 #include "net_util.h"
+#include "sys_util.h"
 
 /**
  * Create a snip_config_t object.
@@ -24,6 +26,8 @@ snip_config_create() {
     snip_config_t *config = malloc(sizeof(snip_config_t));
     memset(config, '\0', sizeof(snip_config_t));
     pthread_mutex_init(&(config->lock), 0);
+    config->user_id = -1;
+    config->group_id = -1;
     return config;
 }
 
@@ -91,11 +95,18 @@ snip_config_display_help_and_exit(const char *name) {
                     "Arguments:\n"
                     "   -c FILE, --conf FILE       Specify an alternative config file.\n"
                     "                              Default: %s\n"
+                    "   -t, --test-config          Evaluate the config file and then exit. Exit code 0 for success.\n"
                     "   -h, --help                 Display this help message.\n"
+                    "\n"
+                    "Exit codes with special meanings:\n"
+                    "   %d - Configuration error\n"
+                    "   %d - Error establishing a listener socket\n"
                     "\n",
             SNIP_VERSION,
             better_name,
-            SNIP_INSTALL_CONF_PATH
+            SNIP_INSTALL_CONF_PATH,
+            SNIP_EXIT_ERROR_INVALID_CONFIG,
+            SNIP_EXIT_ERROR_SOCKET
     );
     exit(0);
 }
@@ -116,6 +127,12 @@ snip_config_parse_args(snip_config_t *config, int argc, char **argv) {
                     required_argument,
                     NULL,
                     'c'
+            },
+            {
+                    "test-config",
+                    no_argument,
+                    NULL,
+                    't'
             },
             {
                     "help",
@@ -141,6 +158,9 @@ snip_config_parse_args(snip_config_t *config, int argc, char **argv) {
                 break;
             case 'h':
                 snip_config_display_help_and_exit(argc ? argv[0] : "snip");
+                break;
+            case 't':
+                config->just_test_config = TRUE;
                 break;
             case -1:
                 break;
@@ -192,6 +212,38 @@ snip_log_config(snip_config_t *config, yaml_event_t *event, snip_log_level_t lev
     }
     va_end(args);
     free(buffer);
+}
+
+/**
+ * Parse a YAML bool tag.
+ * @param event
+ * @param value Pointer to a location where we can store the value.
+ * @return TRUE if the value was parsed properly, FALSE otherwise.
+ *
+ * @see http://yaml.org/type/bool.html
+ */
+SNIP_BOOLEAN
+snip_parse_boolean(yaml_event_t *event, SNIP_BOOLEAN *value) {
+    if(event->type != YAML_SCALAR_EVENT) {
+        return FALSE;
+    }
+    if(!evutil_ascii_strcasecmp((const char *) event->data.scalar.value, "TRUE") ||
+       !evutil_ascii_strcasecmp((const char *) event->data.scalar.value, "YES") ||
+       !evutil_ascii_strcasecmp((const char *) event->data.scalar.value, "ON") ||
+       !evutil_ascii_strcasecmp((const char *) event->data.scalar.value, "Y")) {
+        *value = TRUE;
+        return TRUE;
+    }
+    else if(!evutil_ascii_strcasecmp((const char *) event->data.scalar.value, "FALSE") ||
+       !evutil_ascii_strcasecmp((const char *) event->data.scalar.value, "NO") ||
+       !evutil_ascii_strcasecmp((const char *) event->data.scalar.value, "Off") ||
+       !evutil_ascii_strcasecmp((const char *) event->data.scalar.value, "N")) {
+        *value = FALSE;
+        return TRUE;
+    }
+    else {
+        return FALSE;
+    }
 }
 
 /**
@@ -261,6 +313,31 @@ snip_parse_target(const char *target, const char **hostname, uint16_t *port) {
     }
 }
 
+/**
+ * Verify the configuration is valid and can be executed.
+ * @param config
+ * @return
+ */
+SNIP_BOOLEAN
+snip_validate_config_file(snip_config_t *config) {
+    if(!config->listeners) {
+        snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG, "Config file '%s' had no listeners.", config->config_path);
+        return FALSE;
+    }
+    if(config->user_id == -1 && config->group_id != -1) {
+        snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG,
+                       "Config file '%s' specified a 'group' parameter, but no 'user' parameter.",
+                       config->config_path);
+        return FALSE;
+    }
+    if(config->ipv4_disabled && config->ipv6_disabled) {
+        snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG,
+                       "Config file '%s' disabled IPv4 and IPv6.",
+                       config->config_path);
+        return FALSE;
+    }
+    return TRUE;
+}
 
 /**
  * Read the configuration file and apply it to the specified config structure.
@@ -287,6 +364,10 @@ snip_parse_config_file(snip_config_t *config) {
 
         snip_config_parse_state_listener_bind_rvalue,
         snip_config_parse_state_routes_rvalue,
+        snip_config_parse_state_user_rvalue,
+        snip_config_parse_state_group_rvalue,
+        snip_config_parse_state_ipv4_disabled_rvalue,
+        snip_config_parse_state_ipv6_disabled_rvalue,
 
         snip_config_parse_state_routes_list,
         snip_config_parse_state_routes_list_map,
@@ -404,6 +485,18 @@ snip_parse_config_file(snip_config_t *config) {
                 else if(!strcmp((const char *) event.data.scalar.value, "routes")) {
                     state = snip_config_parse_state_routes_rvalue;
                 }
+                else if(!strcmp((const char *) event.data.scalar.value, "group")) {
+                    state = snip_config_parse_state_group_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "user")) {
+                    state = snip_config_parse_state_user_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "ipv4_disabled")) {
+                    state = snip_config_parse_state_ipv4_disabled_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "ipv6_disabled")) {
+                    state = snip_config_parse_state_ipv6_disabled_rvalue;
+                }
                 else {
                     // We don't recognize this key. We log it as a warning, and make plans to skip the associated value.
                     state_after_skip = state;
@@ -418,7 +511,13 @@ snip_parse_config_file(snip_config_t *config) {
                 }
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
-                state = snip_config_parse_success;
+                // Verify the config before we try to run it.
+                if(snip_validate_config_file(config)) {
+                    state = snip_config_parse_success;
+                }
+                else {
+                    state = snip_config_parse_state_error;
+                }
             }
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "Key had unexpected type ");
@@ -491,11 +590,11 @@ snip_parse_config_file(snip_config_t *config) {
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
                 // This listener is finishing.  Evaluate it for completeness.
-                if(current_listener_item->value.bind_address_string[0]) {
+                if(!current_listener_item->value.bind_address_string[0]) {
                     snip_log_config(config,
                                     &event,
                                     SNIP_LOG_LEVEL_FATAL,
-                                    "'listener' items MUST include a valid 'bind' parameter.");
+                                    "'listener' items MUST include a valid 'bind' parameter ");
                 }
                 current_listener_item = NULL;
                 state = snip_config_parse_state_listeners_in_list;
@@ -505,6 +604,94 @@ snip_parse_config_file(snip_config_t *config) {
                                 &event,
                                 SNIP_LOG_LEVEL_FATAL,
                                 "The 'listeners' section must be a list of key/value dictionaries ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if(state == snip_config_parse_state_user_rvalue) {
+            // The "routes" key is valid in both the root (as a global default) and within listener config objects.
+            // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
+            // shortcut dictionary format.  We figure out which format we have here.
+            if(event.type == YAML_SCALAR_EVENT) {
+                if(get_uid_gid_for_username((const char *) event.data.scalar.value,
+                                            &config->user_id,
+                                            config->group_id == -1 ? &config->group_id : NULL)) // don't overwrite group
+                {
+                    state = snip_config_parse_state_root_map;
+                }
+                else
+                {
+                    snip_log_config(config,
+                                    &event,
+                                    SNIP_LOG_LEVEL_FATAL,
+                                    "Unable to resolve uid for user '%s' specified in config 'user' value.",
+                                    event.data.scalar.value
+                    );
+                    state = snip_config_parse_state_error;
+                }
+            }
+            else if(event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "The 'user' property must be a string or number.");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if(state == snip_config_parse_state_group_rvalue) {
+            // The "routes" key is valid in both the root (as a global default) and within listener config objects.
+            // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
+            // shortcut dictionary format.  We figure out which format we have here.
+            if(event.type == YAML_SCALAR_EVENT) {
+                if((config->group_id = get_gid_for_group_name((const char *) event.data.scalar.value)) >= 0)
+                {
+                    state = snip_config_parse_state_root_map;
+                }
+                else
+                {
+                    snip_log_config(config,
+                                    &event,
+                                    SNIP_LOG_LEVEL_FATAL,
+                                    "Unable to resolve gid for group '%s' specified in config 'group' value.",
+                                    event.data.scalar.value
+                    );
+                    state = snip_config_parse_state_error;
+                }
+            }
+            else if(event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "The 'user' property must be a string or number.");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if(state == snip_config_parse_state_ipv4_disabled_rvalue) {
+            // The "routes" key is valid in both the root (as a global default) and within listener config objects.
+            // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
+            // shortcut dictionary format.  We figure out which format we have here.
+            if(event.type == YAML_SCALAR_EVENT && snip_parse_boolean(&event, &(config->ipv4_disabled))) {
+                state = snip_config_parse_state_root_map;
+            }
+            else if(event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "The 'ipv4_disabled' property must be a boolean.");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if(state == snip_config_parse_state_ipv6_disabled_rvalue) {
+            // The "routes" key is valid in both the root (as a global default) and within listener config objects.
+            // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
+            // shortcut dictionary format.  We figure out which format we have here.
+            if(event.type == YAML_SCALAR_EVENT && snip_parse_boolean(&event, &(config->ipv6_disabled))) {
+                state = snip_config_parse_state_root_map;
+            }
+            else if(event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "The 'ipv6_disabled' property must be a boolean.");
                 state = snip_config_parse_state_error;
             }
         }
@@ -717,6 +904,9 @@ snip_parse_config_file(snip_config_t *config) {
                     " literal (ex. \"*:443\", \"0.0.0.0:443\", \"[::]:443\", \"[::1]:443\" or 443).";
             if(event.type == YAML_SCALAR_EVENT) {
                 current_listener_item->value.bind_port = 0;
+                struct sockaddr_storage address;
+                int address_length = sizeof(struct sockaddr_storage);
+
                 // This looks for the format "*:443" common in apache, etc.
                 if(((const char *) event.data.scalar.value)[0] == '*' &&
                         ((const char *) event.data.scalar.value)[1] == ':' &&
@@ -724,39 +914,55 @@ snip_parse_config_file(snip_config_t *config) {
                 {
                     snip_parse_port(((const char *) event.data.scalar.value) + 2,
                                         &(current_listener_item->value.bind_port));
+                    address_length = 0;
                 }
                 else if(strchr((const char *) event.data.scalar.value, ':') ||
                         strchr((const char *) event.data.scalar.value, '.'))
                 {
                     // This looks like an IPv4/IPv6 literal.
-                    current_listener_item->value.bind_address_length = sizeof(current_listener_item->value.bind_address);
-                    if(evutil_parse_sockaddr_port((const char *) event.data.scalar.value,
-                                                   (struct sockaddr *) &(current_listener_item->value.bind_address),
-                                                   &(current_listener_item->value.bind_address_length)))
+                    if(!evutil_parse_sockaddr_port((const char *) event.data.scalar.value,
+                                                   (struct sockaddr *) &(address),
+                                                   &(address_length)))
                     {
-                        current_listener_item->value.bind_address_length = 0;
-                    }
-                    else {
                         // Parsing the address was successful.  Pull out the port.
-                        if(current_listener_item->value.bind_address.ss_family == AF_INET) {
-                            struct sockaddr_in *sin = (struct sockaddr_in *) &(current_listener_item->value.bind_address);
+                        if(address.ss_family == AF_INET) {
+                            struct sockaddr_in *sin = (struct sockaddr_in *) &(address);
                             if(sin->sin_port) {
                                 current_listener_item->value.bind_port = ntohs(sin->sin_port);
+                                memcpy(&(current_listener_item->value.bind_address_4),
+                                       &address,
+                                       sizeof(struct sockaddr_storage));
+                                current_listener_item->value.bind_address_length_4 = address_length;
+                            }
+                            else {
+                                // We REQUIRE the port.
+                                address_length = 0;
                             }
                         }
-                        else if(current_listener_item->value.bind_address.ss_family == AF_INET6) {
-                            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) &(current_listener_item->value.bind_address);
+                        else if(address.ss_family == AF_INET6) {
+                            struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *) &(address);
                             if(sin6->sin6_port) {
                                 current_listener_item->value.bind_port = ntohs(sin6->sin6_port);
+                                memcpy(&(current_listener_item->value.bind_address_6),
+                                       &address,
+                                       sizeof(struct sockaddr_storage));
+                                current_listener_item->value.bind_address_length_6 = address_length;
+
+                            }
+                            else {
+                                // We REQUIRE the port.
+                                address_length = 0;
                             }
                         }
-                        else {
-                            current_listener_item->value.bind_address_length = 0;
-                        }
+                    }
+                    else {
+                        // The parse failed.
+                        address_length = 0;
                     }
                 }
                 else
                 {
+                    address_length = 0;
                     snip_parse_port((const char *) event.data.scalar.value, &(current_listener_item->value.bind_port));
                 }
 
@@ -767,9 +973,9 @@ snip_parse_config_file(snip_config_t *config) {
                 }
                 else {
                     state = snip_config_parse_state_listener_item_map;
-                    if(current_listener_item->value.bind_address_length) {
+                    if(address_length) {
                         if(snip_sockaddr_to_string(current_listener_item->value.bind_address_string,
-                                                (struct sockaddr *) &(current_listener_item->value.bind_address)) < 0)
+                                                (struct sockaddr *) &(address)) < 0)
                         {
                             snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, bind_message);
                             state = snip_config_parse_state_error;
@@ -833,9 +1039,14 @@ snip_listener_socket_is_equal(snip_config_listener_t *a, snip_config_listener_t 
  */
 void
 snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener_t *new_listener) {
-    new_listener->socket = old_listener->socket;
-    old_listener->socket = NULL;
-    memcpy(&(new_listener->socket_addr), &(old_listener->socket_addr), sizeof(struct sockaddr_in));
+    new_listener->libevent_listener_4 = old_listener->libevent_listener_4;
+    old_listener->libevent_listener_4 = NULL;
+    new_listener->libevent_listener_6 = old_listener->libevent_listener_6;
+    old_listener->libevent_listener_6 = NULL;
+    memcpy(&(new_listener->bind_address_4), &(old_listener->bind_address_4), sizeof(struct sockaddr_storage));
+    new_listener->bind_address_length_4 = old_listener->bind_address_length_4;
+    memcpy(&(new_listener->bind_address_6), &(old_listener->bind_address_6), sizeof(struct sockaddr_storage));
+    new_listener->bind_address_length_6 = old_listener->bind_address_length_6;
     snip_config_release(old_listener->config);
 }
 

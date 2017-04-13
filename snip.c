@@ -25,6 +25,7 @@
 #include "tls.h"
 #include "log.h"
 #include "net_util.h"
+#include "sys_util.h"
 
 #include <pthread.h>
 
@@ -46,6 +47,8 @@ typedef struct snip_context_e {
     char **argv;
 
     int shutting_down;
+
+    SNIP_BOOLEAN dropped_privileges;
 
     uint64_t next_id;
 } snip_context_t;
@@ -448,8 +451,6 @@ snip_target_event_cb(
         void *ctx
 ) {
     snip_pair_t *client = (snip_pair_t *) ctx;
-    // TODO - Better log messages. It's unclear if we can get the resolved address
-    // with bufferevent_socket_connect_hostname
     if(events & BEV_EVENT_CONNECTED) {
         client->state = snip_pair_state_proxying;
         client->target_state = snip_socket_state_connected;
@@ -814,10 +815,18 @@ snip_client_read_cb(
                         client->route, client->sni_hostname);
                 snip_pair_set_description(client);
 
+                int address_family = AF_UNSPEC;
+                if(context->config->ipv6_disabled) {
+                    address_family = AF_INET;
+                }
+                else if(context->config->ipv4_disabled) {
+                    address_family = AF_INET6;
+                }
+
                 if(bufferevent_socket_connect_hostname(
                         client->target_bev,
                         context->dns_base,
-                        AF_UNSPEC,
+                        address_family,
                         client->target_hostname,
                         client->target_port))
                 {
@@ -908,7 +917,6 @@ snip_client_event_cb(
         void *ctx
 ) {
     snip_pair_t *client = (snip_pair_t *) ctx;
-    // TODO - Better log messages.
     if (events & BEV_EVENT_ERROR) {
         int error_number = EVUTIL_SOCKET_ERROR();
         snip_log(SNIP_LOG_LEVEL_WARNING,
@@ -1028,32 +1036,155 @@ snip_accept_error_cb(struct evconnlistener *evconn, void *ctx)
  */
 SNIP_BOOLEAN
 snip_listen(snip_context_ref_t context, snip_config_t *config, snip_config_listener_t *listener) {
-    memset(&(listener->socket_addr), 0, sizeof(listener->socket_addr));
     // We pass the config in directly instead of getting it from context because on a reload it hasn't been set yet.
     listener->config = snip_config_retain(config);
 
-
-    listener->socket_addr.sin_family = AF_INET;
-    listener->socket_addr.sin_addr.s_addr = htonl(0);
-    listener->socket_addr.sin_port = htons(listener->bind_port);
-    listener->socket = evconnlistener_new_bind(context->event_base,
-                                               snip_accept_incoming_cb,
-                                               (void *) listener,
-                                               LEV_OPT_CLOSE_ON_FREE|LEV_OPT_REUSEABLE|LEV_OPT_THREADSAFE,
-                                               -1,
-                                               (struct sockaddr*)&listener->socket_addr,
-                                               sizeof(listener->socket_addr)
-    );
-    if (!listener->socket) {
-        snip_config_release(config);
-        snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
-                       "Failed to open socket (%s): %s.",
-                       listener->bind_address_string,
-                       strerror(errno)
-        );
-        return FALSE;
+    // The user can specify a bind address, or just a port.  If they JUST specify the port, we assume a dual-stack setup
+    // and need to initialize the addresses.
+    struct sockaddr_in *address4 = (struct sockaddr_in *) &listener->bind_address_4;
+    struct sockaddr_in6 *address6 = (struct sockaddr_in6 *) &listener->bind_address_6;
+    if(!listener->bind_address_length_4 && !listener->bind_address_length_6) {
+        if(!config->ipv4_disabled) {
+            address4->sin_family = AF_INET;
+            address4->sin_port = htons(listener->bind_port);
+            address4->sin_addr.s_addr = INADDR_ANY;
+            listener->bind_address_length_4 = sizeof(struct sockaddr_in);
+        }
+        if(!config->ipv6_disabled) {
+            address6->sin6_family = AF_INET6;
+            address6->sin6_port = htons(listener->bind_port);
+            address6->sin6_addr = in6addr_any;
+            listener->bind_address_length_6 = sizeof(struct sockaddr_in6);
+        }
     }
-    evconnlistener_set_error_cb(listener->socket, snip_accept_error_cb);
+
+    listener->socket_disabled = TRUE;
+    if(listener->bind_address_length_4) {
+        listener->libevent_listener_4 = evconnlistener_new_bind(
+                context->event_base,
+                snip_accept_incoming_cb,
+                (void *) listener,
+                LEV_OPT_CLOSE_ON_FREE|LEV_OPT_REUSEABLE|LEV_OPT_DISABLED,
+                -1,
+                (struct sockaddr*)&listener->bind_address_4,
+                listener->bind_address_length_4);
+
+        if (!listener->libevent_listener_4) {
+            snip_config_release(config);
+            snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                           "Failed to open IPv4 socket (%s): %d %s.",
+                           listener->bind_address_string,
+                           errno,
+                           strerror(errno)
+            );
+            return FALSE;
+        }
+        evconnlistener_set_error_cb(listener->libevent_listener_4, snip_accept_error_cb);
+    }
+    if(listener->bind_address_length_6) {
+        // This one is a bit more involved.  For consistency we need to set IPV6_V6ONLY on the socket before we bind.
+        evutil_socket_t v6_fd = -1;
+
+        // This is a linux shortcut lets us avoid some syscalls and is safer (if it works).
+#if defined(SOCK_NONBLOCK) && defined(SOCK_CLOEXEC)
+        v6_fd = socket(address6->sin6_family, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, 0);
+#endif
+        if(v6_fd < 0 &&
+                ((v6_fd = socket(address6->sin6_family, SOCK_STREAM, 0)) >= 0))
+        {
+            if((evutil_make_socket_nonblocking(v6_fd) < 0)) {
+                evutil_closesocket(v6_fd);
+                v6_fd = -1;
+                snip_config_release(config);
+                snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                               "Failed to set socket non-blocking (%s): %s.",
+                               listener->bind_address_string,
+                               strerror(errno)
+                );
+                return FALSE;
+            }
+            if(evutil_make_socket_closeonexec(v6_fd) < 0) {
+                evutil_closesocket(v6_fd);
+                v6_fd = -1;
+                snip_config_release(config);
+                snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                               "Failed to set socket to close on exec (%s): %s.",
+                               listener->bind_address_string,
+                               strerror(errno)
+                );
+                return FALSE;
+            }
+        }
+        if(v6_fd < 0) {
+            snip_config_release(config);
+            snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                           "Failed to open IPv6 socket (%s): %s.",
+                           listener->bind_address_string,
+                           strerror(errno)
+            );
+            return FALSE;
+        }
+        // Ok, here's why do this dance.  We want our IPv6
+        int no = 0;
+        if(setsockopt(v6_fd, IPPROTO_IPV6, IPV6_V6ONLY, &no, sizeof(no)) < 0) {
+            evutil_closesocket(v6_fd);
+            v6_fd = -1;
+            snip_config_release(config);
+            snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                           "Failed to set IPv6 socket to v6 only (%s): %s.",
+                           listener->bind_address_string,
+                           strerror(errno)
+            );
+            return FALSE;
+        }
+
+        if(evutil_make_listen_socket_reuseable(v6_fd) < 0) {
+            evutil_closesocket(v6_fd);
+            v6_fd = -1;
+            snip_config_release(config);
+            snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                           "Failed to set IPv6 socket to v6 only (%s): %s.",
+                           listener->bind_address_string,
+                           strerror(errno)
+            );
+            return FALSE;
+        }
+
+
+        if(bind(v6_fd, (struct sockaddr *) &(listener->bind_address_6), (socklen_t) listener->bind_address_length_6) < 0) {
+            evutil_closesocket(v6_fd);
+            v6_fd = -1;
+            snip_config_release(config);
+            snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                           "Failed to set IPv6 socket to v6 only (%s): %s.",
+                           listener->bind_address_string,
+                           strerror(errno)
+            );
+            return FALSE;
+        }
+
+        listener->libevent_listener_6 = evconnlistener_new(context->event_base,
+                                      snip_accept_incoming_cb,
+                                      (void *) listener,
+                                      LEV_OPT_DISABLED |  LEV_OPT_CLOSE_ON_FREE,
+                                      -1,
+                                      v6_fd);
+
+
+        if (!listener->libevent_listener_6) {
+            snip_config_release(config);
+            snip_log_fatal(SNIP_EXIT_ERROR_SOCKET,
+                           "Failed to bind IPv6 Socket (%s): %s.",
+                           listener->bind_address_string,
+                           strerror(errno)
+            );
+            return FALSE;
+        }
+        evconnlistener_set_error_cb(listener->libevent_listener_6, snip_accept_error_cb);
+    }
+
+
+
     return TRUE;
 }
 
@@ -1153,7 +1284,7 @@ snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
     while(new_listener) {
         old_listener = old_config ? old_config->listeners : NULL;
         while(old_listener) {
-            if(old_listener->value.socket &&
+            if(old_listener->value.libevent_listener_4 &&
                snip_listener_socket_is_equal(&(old_listener->value), &(new_listener->value)))
             {
                 snip_listener_replace(&(old_listener->value), &(new_listener->value));
@@ -1161,7 +1292,7 @@ snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
             }
             old_listener = old_listener->next;
         }
-        if(!new_listener->value.socket) {
+        if(!new_listener->value.libevent_listener_4) {
             // We're not already listening on this port/interface.  Start.
             snip_listen(context, new_config, &(new_listener->value));
         }
@@ -1170,14 +1301,38 @@ snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
 
     old_listener = old_config ? old_config->listeners : NULL;
     while(old_listener) {
-        if(old_listener->value.socket) {
-            evconnlistener_free(old_listener->value.socket);
+        if(old_listener->value.libevent_listener_4) {
+            evconnlistener_free(old_listener->value.libevent_listener_4);
             // We won't be accepting any new connections.  In-progress connections retain the config individually.
             snip_config_release(old_config);
-            old_listener->value.socket = NULL;
+            old_listener->value.libevent_listener_4 = NULL;
         }
         old_listener = old_listener->next;
     }
+
+    // We can only drop privileges once.
+    if(!context->dropped_privileges && new_config->user_id != -1) {
+        if(!drop_privileges((uid_t) new_config->user_id, (gid_t) new_config->group_id)) {
+            snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "Unable to drop privileges: (%d) %s", errno, strerror(errno));
+            return;
+        }
+        context->dropped_privileges = TRUE;
+    }
+
+    new_listener = new_config->listeners;
+    while(new_listener) {
+        if(new_listener->value.socket_disabled) {
+            if(new_listener->value.libevent_listener_4) {
+                evconnlistener_enable(new_listener->value.libevent_listener_4);
+            }
+            if(new_listener->value.libevent_listener_6) {
+                evconnlistener_enable(new_listener->value.libevent_listener_6);
+            }
+            new_listener->value.socket_disabled = FALSE;
+        }
+        new_listener = new_listener->next;
+    }
+
 
     context->config = new_config;
     if(old_config) {
@@ -1210,6 +1365,12 @@ snip_reload_config(snip_context_ref_t context, int argc, char **argv) {
     if(!snip_parse_config_file(new_config)) {
         snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG, "Invalid configuration file '%s'.", new_config->config_path);
         return;
+    }
+
+    // Just test the config, don't actually launch the listeners.  If the config was invalid it would have exited with
+    // a fatal log.
+    if(new_config->just_test_config) {
+        exit(EXIT_SUCCESS);
     }
 
     // Apply the config inside the event loop.

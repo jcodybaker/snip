@@ -33,15 +33,19 @@ typedef struct snip_config_listener_e {
     int ipv4;
     int ipv6;
     char bind_address_string[INET6_ADDRSTRLEN_WITH_PORT];
-    struct sockaddr_storage bind_address;
-    int bind_address_length;
+    struct sockaddr_storage bind_address_4;
+    int bind_address_length_4;
+    struct sockaddr_storage bind_address_6;
+    int bind_address_length_6;
     uint16_t bind_port;
 
     snip_config_route_list_t *routes;
     snip_config_route_t *default_route;
 
-    struct evconnlistener *socket;
-    struct sockaddr_in socket_addr;
+    struct evconnlistener *libevent_listener_4;
+    struct evconnlistener *libevent_listener_6;
+
+    SNIP_BOOLEAN socket_disabled;
 
     struct snip_config_e *config;
 } snip_config_listener_t;
@@ -61,6 +65,14 @@ typedef struct snip_config_e {
 
     pthread_mutex_t lock;
     int references;
+
+    long user_id;
+    long group_id;
+
+    SNIP_BOOLEAN ipv6_disabled;
+    SNIP_BOOLEAN ipv4_disabled;
+
+    SNIP_BOOLEAN just_test_config;
 
     struct snip_context_e *context;
 } snip_config_t;
