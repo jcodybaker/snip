@@ -165,7 +165,7 @@ snip_config_parse_args(snip_config_t *config, int argc, char **argv) {
             case -1:
                 break;
             default:
-                printf("Unknown parameter %d\n", rv);
+                exit(SNIP_EXIT_ERROR_INVALID_CONFIG);
                 break;
         }
     } while (rv >= 0);
