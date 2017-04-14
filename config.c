@@ -330,7 +330,7 @@ snip_validate_config_file(snip_config_t *config) {
                        config->config_path);
         return FALSE;
     }
-    if(config->ipv4_disabled && config->ipv6_disabled) {
+    if(config->disable_ipv4 && config->disable_ipv6) {
         snip_log_fatal(SNIP_EXIT_ERROR_INVALID_CONFIG,
                        "Config file '%s' disabled IPv4 and IPv6.",
                        config->config_path);
@@ -366,8 +366,8 @@ snip_parse_config_file(snip_config_t *config) {
         snip_config_parse_state_routes_rvalue,
         snip_config_parse_state_user_rvalue,
         snip_config_parse_state_group_rvalue,
-        snip_config_parse_state_ipv4_disabled_rvalue,
-        snip_config_parse_state_ipv6_disabled_rvalue,
+        snip_config_parse_state_disable_ipv4_rvalue,
+        snip_config_parse_state_disable_ipv6_rvalue,
 
         snip_config_parse_state_routes_list,
         snip_config_parse_state_routes_list_map,
@@ -491,11 +491,11 @@ snip_parse_config_file(snip_config_t *config) {
                 else if(!strcmp((const char *) event.data.scalar.value, "user")) {
                     state = snip_config_parse_state_user_rvalue;
                 }
-                else if(!strcmp((const char *) event.data.scalar.value, "ipv4_disabled")) {
-                    state = snip_config_parse_state_ipv4_disabled_rvalue;
+                else if(!strcmp((const char *) event.data.scalar.value, "disable_ipv4")) {
+                    state = snip_config_parse_state_disable_ipv4_rvalue;
                 }
-                else if(!strcmp((const char *) event.data.scalar.value, "ipv6_disabled")) {
-                    state = snip_config_parse_state_ipv6_disabled_rvalue;
+                else if(!strcmp((const char *) event.data.scalar.value, "disable_ipv6")) {
+                    state = snip_config_parse_state_disable_ipv6_rvalue;
                 }
                 else {
                     // We don't recognize this key. We log it as a warning, and make plans to skip the associated value.
@@ -665,33 +665,33 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_state_error;
             }
         }
-        else if(state == snip_config_parse_state_ipv4_disabled_rvalue) {
+        else if(state == snip_config_parse_state_disable_ipv4_rvalue) {
             // The "routes" key is valid in both the root (as a global default) and within listener config objects.
             // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
             // shortcut dictionary format.  We figure out which format we have here.
-            if(event.type == YAML_SCALAR_EVENT && snip_parse_boolean(&event, &(config->ipv4_disabled))) {
+            if(event.type == YAML_SCALAR_EVENT && snip_parse_boolean(&event, &(config->disable_ipv4))) {
                 state = snip_config_parse_state_root_map;
             }
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
                                 SNIP_LOG_LEVEL_FATAL,
-                                "The 'ipv4_disabled' property must be a boolean.");
+                                "The 'disable_ipv4' property must be a boolean.");
                 state = snip_config_parse_state_error;
             }
         }
-        else if(state == snip_config_parse_state_ipv6_disabled_rvalue) {
+        else if(state == snip_config_parse_state_disable_ipv6_rvalue) {
             // The "routes" key is valid in both the root (as a global default) and within listener config objects.
             // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
             // shortcut dictionary format.  We figure out which format we have here.
-            if(event.type == YAML_SCALAR_EVENT && snip_parse_boolean(&event, &(config->ipv6_disabled))) {
+            if(event.type == YAML_SCALAR_EVENT && snip_parse_boolean(&event, &(config->disable_ipv6))) {
                 state = snip_config_parse_state_root_map;
             }
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
                                 SNIP_LOG_LEVEL_FATAL,
-                                "The 'ipv6_disabled' property must be a boolean.");
+                                "The 'disable_ipv6' property must be a boolean.");
                 state = snip_config_parse_state_error;
             }
         }

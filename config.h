@@ -69,8 +69,8 @@ typedef struct snip_config_e {
     long user_id;
     long group_id;
 
-    SNIP_BOOLEAN ipv6_disabled;
-    SNIP_BOOLEAN ipv4_disabled;
+    SNIP_BOOLEAN disable_ipv6;
+    SNIP_BOOLEAN disable_ipv4;
 
     SNIP_BOOLEAN just_test_config;
 

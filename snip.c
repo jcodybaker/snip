@@ -816,10 +816,10 @@ snip_client_read_cb(
                 snip_pair_set_description(client);
 
                 int address_family = AF_UNSPEC;
-                if(context->config->ipv6_disabled) {
+                if(context->config->disable_ipv6) {
                     address_family = AF_INET;
                 }
-                else if(context->config->ipv4_disabled) {
+                else if(context->config->disable_ipv4) {
                     address_family = AF_INET6;
                 }
 
@@ -1044,13 +1044,13 @@ snip_listen(snip_context_ref_t context, snip_config_t *config, snip_config_liste
     struct sockaddr_in *address4 = (struct sockaddr_in *) &listener->bind_address_4;
     struct sockaddr_in6 *address6 = (struct sockaddr_in6 *) &listener->bind_address_6;
     if(!listener->bind_address_length_4 && !listener->bind_address_length_6) {
-        if(!config->ipv4_disabled) {
+        if(!config->disable_ipv4) {
             address4->sin_family = AF_INET;
             address4->sin_port = htons(listener->bind_port);
             address4->sin_addr.s_addr = INADDR_ANY;
             listener->bind_address_length_4 = sizeof(struct sockaddr_in);
         }
-        if(!config->ipv6_disabled) {
+        if(!config->disable_ipv6) {
             address6->sin6_family = AF_INET6;
             address6->sin6_port = htons(listener->bind_port);
             address6->sin6_addr = in6addr_any;
