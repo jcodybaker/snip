@@ -151,7 +151,7 @@ snip_config_parse_args(snip_config_t *config, int argc, char **argv) {
     optind = 0;
 
     do {
-        rv = getopt_long(argc, argv, "c:h", arguments, &index);
+        rv = getopt_long(argc, argv, "c:ht", arguments, &index);
         switch(rv) {
             case 'c':
                 config->config_path = optarg;

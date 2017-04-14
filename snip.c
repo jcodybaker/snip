@@ -1370,6 +1370,7 @@ snip_reload_config(snip_context_ref_t context, int argc, char **argv) {
     // Just test the config, don't actually launch the listeners.  If the config was invalid it would have exited with
     // a fatal log.
     if(new_config->just_test_config) {
+        snip_log(SNIP_LOG_LEVEL_INFO, "Configuration looks good.");
         exit(EXIT_SUCCESS);
     }
 
