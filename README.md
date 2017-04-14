@@ -27,7 +27,41 @@ the proxy relays the handshake and encrypted data, but is not a party to the une
 ## Use Cases
 
 ### Mixed Platform HTTPS Hosting
+Small and medium businesses are often allocated a single static IPv4 address for on-premise internet connectivity.
+TLS SNIp allows these businesses to host multiple HTTPS services on a single IPv4 address.  Communication between 
+the client browser and end service application is secured end-to-end.  The end HTTPS applications require no special
+configuration and can be hosted on the same server, or traverse the local network.
 ![Mixed Platform Network Diagram](docs/MixedPlatformDiagram.png)
+
+## Building and Installing TLS SNIp
+TLS SNIp uses the cmake build system.  Cmake can generate build projects/scripts for unix make, xcode, and MS Visual
+Studio, among others.
+
+### Requirements
+- LibEvent 2.1
+- LibYAML
+
+## Configuration
+TLS SNIp uses 
+
+### Command Line Arguments
+
+### Reloading Configuration
+Configurations can be reloaded by signaling HUP.  
+```
+killall -HUP snip
+```
+
+To be safe, you should test the configuration before reloading it.  Loading an invalid configuration can cause the
+application to exist with an error. 
+
+```
+if ./snip -t -c ../example.yml; then killall -HUP snip; fi
+```
+
+If the 'user' configuration value is specified, TLS SNIp drops privileges after it binds to ports during launch. 
+Privileges cannot be regained after they have been dropped.  Adding an additional privileged listener and reloading,
+will cause a fatal error when SNIp tries to bind the port with its reduced privileges.  
 
 ## Todo
 
