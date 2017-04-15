@@ -169,8 +169,8 @@ routes:
 ```
 
 ## Todo / Bugs / Feature Requests
-This software is currently pre-1.0, meaning that while it works, the feature set is non complete.  If you desire 
- additional functionality or want to nominate one of the below-listed items for higer priority, please file an issue on
+This software is currently pre-1.0, meaning that while it works, the feature set is non-complete.  If you desire 
+ additional functionality or want to nominate one of the below-listed items for higher priority, please file an issue on
  this project or contact me at cody@codybaker.com.
 
 * Regex matching / targets
@@ -179,7 +179,7 @@ This software is currently pre-1.0, meaning that while it works, the feature set
 * TLS test - There are currently no unit tests written for verifying our parsing of SNI. Goal is to build a set samples
   of common TLS implementations, as well as verify edge/security cases work as expected.
 * Ability to configure default routes
-* Windows support - TLS SNIp uses libevent to smooth over lots of network api differences between BSD, Linux, and 
+* Windows support - TLS SNIp uses libevent to smooth over lots of network API differences between BSD, Linux, and 
   Windows, so it may "Just Work".  Needs to be verified.  Likely problems in threading, and privilege drop.
 * International URLs
 * DNS caching - On some platforms the DNS resolver used may issue DNS requests for each connection instead of internally
