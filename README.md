@@ -191,3 +191,8 @@ This software is currently pre-1.0, meaning that while it works, the feature set
 * Ability to filter requests for insecure ciphers/protocol versions from TLS/SSL endpoints which don't offer those
   configuration options.
 * Docker container  
+* Client stickiness based on session id.
+* End-point health checking
+* Multiple targets / balancing.
+* Binary packages.
+* Init scripts for system v, systemd, launchd
