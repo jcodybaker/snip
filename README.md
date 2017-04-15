@@ -168,14 +168,26 @@ routes:
 
 ```
 
-## Todo
+## Todo / Bugs / Feature Requests
+This software is currently pre-1.0, meaning that while it works, the feature set is non complete.  If you desire 
+ additional functionality or want to nominate one of the below-listed items for higer priority, please file an issue on
+ this project or contact me at cody@codybaker.com.
 
-- Regex matching / targets
-- chrome support
-- TLS tests
-- configure default routes
-- documentation
-- more configuration validation
-- windows
-- International URLs
-- DNS caching.
+* Regex matching / targets
+* Chrome support - This currently fails to pull the proper SNI hostname from the request. This may be related to HTTP/2
+  or SPDY.
+* TLS test - There are currently no unit tests written for verifying our parsing of SNI. Goal is to build a set samples
+  of common TLS implementations, as well as verify edge/security cases work as expected.
+* Ability to configure default routes
+* Windows support - TLS SNIp uses libevent to smooth over lots of network api differences between BSD, Linux, and 
+  Windows, so it may "Just Work".  Needs to be verified.  Likely problems in threading, and privilege drop.
+* International URLs
+* DNS caching - On some platforms the DNS resolver used may issue DNS requests for each connection instead of internally
+  caching or using the systems own cache.
+* Clear-text endpoints, where TLS SNIp uses OpenSSL/BoringSSL to provide encryption.
+* On-Demand Certificates for clear-text end-points.
+* On-Demand Recertification for TLS-endpoints. We intercept the ServerHello, pull the public key from the certificate,
+  and sub-in an alternative certificate signed against the same key.
+* Ability to filter requests for insecure ciphers/protocol versions from TLS/SSL endpoints which don't offer those
+  configuration options.
+* Docker container  
