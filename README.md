@@ -42,9 +42,17 @@ Studio, among others.
 - LibYAML
 
 ## Configuration
-TLS SNIp uses 
+TLS SNIp uses [YAML 1.1](http://yaml.org/spec/1.1/) to describe its configuration.  YAML is a superset of JSON, meaning
+configurations can also be specified in JSON.  YAML permits comments on lines which start with "#".
 
 ### Command Line Arguments
+
+```
+   -c FILE, --conf FILE       Specify an alternative config file.
+                              Default: snip.yml
+   -t, --test-config          Evaluate the config file and then exit. Exit code 0 for success.
+   -h, --help                 Display this help message.
+```
 
 ### Reloading Configuration
 Configurations can be reloaded by signaling HUP.  
@@ -63,6 +71,103 @@ If the 'user' configuration value is specified, TLS SNIp drops privileges after 
 Privileges cannot be regained after they have been dropped.  Adding an additional privileged listener and reloading,
 will cause a fatal error when SNIp tries to bind the port with its reduced privileges.  
 
+### Configuration File
+* "**listeners**" (**Required**) *List* - A list of listener objects, specified in the format listed below.
+* "**routes**" *(Optional) List|Dictionary* - A list of route objects, specified in the format listed below.
+* "**disable_ipv4**" *(Optional) Boolean* - Don't use IPv4 for outbound connections and don't bind IPv4 listeners for wildcard
+ 'bind's. It is invalid to specify both ""
+ *Note: explicitly ipv6 listeners (ex. "[::]:443") will still bind.*
+* "**disable_ipv6**" *(Optional) Boolean* - Don't use IPv4 for outbound connections and don't bind IPv4 listeners for wildcard
+ 'bind's.  
+ *Note: explicitly ipv4 listeners (ex. "0.0.0.0:443") will still bind.*
+* "**user**" *(Optional, required if "group" is specified) String* - After binding the listeners, drop privileges and switch to the specified user.
+* "**group**" *(Optional) String* - After binding the listeners, drop privileges and switch to the specified group.
+
+#### Listeners
+Listeners describe a configuration for a specific port which TLS SNIp will proxy. The configuration must specify at 
+least one listener.
+* "**bind**" (**Required**) *String|Number* - A port and optional address TLS SNIp should listen on.  
+ The following formats are valid
+  * "port" or "*:port" (ex. "443" or "*:443") - TLS SNIp will listen at the specified port on all IPv4 and IPv6 sockets
+    unless "disable_ipv4" or "disable_ipv6" are specified.
+  * "0.0.0.0:port" (ex. "0.0.0.0:443") - TLS SNIp will listen at the specified port on all IPv4 sockets.
+  * "[::]:port" (ex. "[::]:443") - TLS SNIp will listen at the specified port on all IPv6 sockets.
+  * "IPv4:port" (ex. "10.0.0.1:443") - TLS SNIp will listen at the specified port on the interface which has the 
+    specified address.
+  * "[IPv6]:port" (ex. "[::1]:443") - TLS SNIp will listen at the specified port on the interface which has the
+    specified address.
+* "**routes**" *(Optional) List|Dictionary* - A list of route objects, specified in the format listed below. 
+
+#### Routes
+Routes can be specified globally or on specific listeners. Routes are matched in the order of they are listed.  Routes
+specified on the listener will be attempted first, followed by global routes. Routes can be specified in a long format
+and a shortcut format.
+
+##### Long Format
+* "sni_hostname" (**Required**) *String* - Matched against the SNI hostname transmitted in the client's connection
+  header.  This comparison is case-insensitive.
+* "target" (**Required**) *String* - An IP Address (ex. "192.168.1.1" and "192.168.1.1:443") or hostname 
+  (ex. "www.github.com" "www.github.com:443") proxy destination.  If a port is not specified, one will be inferred from
+  the listener's bind port.  Hostnames will be resolved at the time of connection.
+  
+##### Shortcut Format
+The "routes" section can be specified as dictionary where the key is the "sni_hostname" (see above) and the value maps
+ to the "target" field (see above).
+ 
+For example:
+```
+routes:
+  "www.example.com": "internal.example.com"
+  "www.foo.com": "bar.com:443"
+  "github.com": "192.168.1.1:443"
+```
+
+#### Examples
+```yaml
+# Example snip configuration file.
+listeners:
+- bind: "0.0.0.0:443"
+  routes:
+    - sni_hostname: "www.bing.com"
+      target: "bing.com:443"
+- bind: 8443
+  routes:
+    "www.bing.com": "bing.com"
+- bind: "*:9443"
+- bind: "[::0]:10443"
+routes:
+  "www.google.com": "google.com"
+  "www.yahoo.com": "yahoo.com:443"
+```
+
+```yaml
+# Example snip configuration file, encoded as JSON.  Note: comments are still valid.
+{
+  "listeners": [
+    {
+      "bind": "0.0.0.0:443",
+      "routes": [
+        {
+          "sni_hostname": "www.bing.com",
+          "target": "bing.com:443"
+        }
+      ]
+    },
+    {
+      "bind": "0.0.0.0:8443",
+      "routes": {
+        "www.bing.com": "bing.com"
+      }
+    }
+  ],
+  "routes": {
+    "www.google.com": "google.com",
+    "www.yahoo.com": "yahoo.com:443"
+  }
+}
+
+```
+
 ## Todo
 
 - Regex matching / targets
@@ -72,3 +177,5 @@ will cause a fatal error when SNIp tries to bind the port with its reduced privi
 - documentation
 - more configuration validation
 - windows
+- International URLs
+- DNS caching.
