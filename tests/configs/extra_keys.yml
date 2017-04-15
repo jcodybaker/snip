@@ -7,8 +7,7 @@ listeners:
   bind: 0.0.0.0:443
   routes:
     - sni_hostname: "www.bing.com"
-      target: "bing.com"
-      target_port: 443
+      target: "bing.com:443"
 - bind: 0.0.0.0:8443
   routes:
     "www.bing.com": "bing.com"

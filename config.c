@@ -373,7 +373,6 @@ snip_parse_config_file(snip_config_t *config) {
         snip_config_parse_state_routes_list_map,
         snip_config_parse_state_routes_list_map_sni_hostname_value,
         snip_config_parse_state_routes_list_map_target_value,
-        snip_config_parse_state_routes_list_map_target_port_value,
 
         snip_config_parse_state_routes_map,
         snip_config_parse_state_routes_map_value,
@@ -825,9 +824,6 @@ snip_parse_config_file(snip_config_t *config) {
                 else if(!strcmp((const char *) event.data.scalar.value, "target")) {
                     state = snip_config_parse_state_routes_list_map_target_value;
                 }
-                else if(!strcmp((const char *) event.data.scalar.value, "target_port")) {
-                    state = snip_config_parse_state_routes_list_map_target_port_value;
-                }
                 else {
                     // We don't recognize this key. We log it as a warning, and make plans to skip the associated value.
                     state_after_skip = state;
@@ -874,28 +870,6 @@ snip_parse_config_file(snip_config_t *config) {
                                 &event,
                                 SNIP_LOG_LEVEL_FATAL,
                                 "Route property 'target' expects a string value ");
-                state = snip_config_parse_state_error;
-            }
-        }
-        else if (state == snip_config_parse_state_routes_list_map_target_port_value) {
-            if(event.type == YAML_SCALAR_EVENT) {
-                if(!snip_parse_port((const char *) event.data.scalar.value, &(current_route_item->value.port))) {
-                    snip_log_config(config,
-                                    &event,
-                                    SNIP_LOG_LEVEL_FATAL,
-                                    "Invalid port specification '%s' for route ",
-                                    event.data.scalar.value);
-                    state = snip_config_parse_state_error;
-                }
-                else {
-                    state = snip_config_parse_state_routes_list_map;
-                }
-            }
-            else if (event.type != YAML_NO_EVENT) {
-                snip_log_config(config,
-                                &event,
-                                SNIP_LOG_LEVEL_FATAL,
-                                "Route property 'target_port' expects an integer between 0 and 65535 ");
                 state = snip_config_parse_state_error;
             }
         }
@@ -1028,7 +1002,7 @@ snip_listener_socket_is_equal(snip_config_listener_t *a, snip_config_listener_t 
     if(!(a->bind_address_string[0]) || !(b->bind_address_string[0])) {
         return FALSE;
     }
-    return !strcmp(a->bind_address_string, a->bind_address_string);
+    return !evutil_ascii_strcasecmp(a->bind_address_string, a->bind_address_string);
 }
 
 /**
