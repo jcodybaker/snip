@@ -38,46 +38,53 @@ typedef struct snip_tls_handshake_message_s {
 } snip_tls_handshake_message_t;
 
 
-//
-//struct snip_TLS_random {
-//    uint32_t gmt_unix_time;
-//    uint8_t random_bytes[28];
-//};
-//
-//struct snip_TLS_client_hello {
-//    struct snip_TLS_version client_version;
-//    struct snip_TLS_random random;
-//    uint32_t session_id[32];
-//    uint16_t cipher_suite_length;
-//    uint8_t *cipher_suites;
-//    uint8_t *extensions;
-//};
-//
+typedef struct snip_tls_random_s {
+    uint32_t gmt_unix_time;
+    uint8_t random_bytes[28];
+} snip_tls_random_t;
+
+typedef struct snip_tls_client_hello_s {
+    snip_tls_version_t client_version;
+    snip_tls_random_t random;
+
+    uint8_t session_id_length;
+    const unsigned char *session_id;
+
+    uint16_t cipher_suite_length;
+    const unsigned char *cipher_suites_data;
+
+    uint8_t compression_methods_length;
+    const unsigned char *compression_methods_data;
+
+    uint16_t extensions_data_length;
+    const unsigned char *extensions_data;
+} snip_tls_client_hello_t;
+
 
 #define SNIP_TLS_RECORD_TYPE_HANDSHAKE 0x16
 #define SNIP_TLS_RECORD_HEADER_LENGTH 5
 
 #define SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH 1
-#define SNIP_TLS_HANDSHAKE_LENGTH_LENGTH 3
+#define SNIP_TLS_HANDSHAKE_LENGTH_SIZE 3
 // Summarize the handshake message header length
-#define SNIP_TLS_HANDSHAKE_HEADER_LENGTH (SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH + SNIP_TLS_HANDSHAKE_LENGTH_LENGTH)
+#define SNIP_TLS_HANDSHAKE_HEADER_LENGTH (SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH + SNIP_TLS_HANDSHAKE_LENGTH_SIZE)
 
 #define SNIP_TLS_CLIENT_HELLO_VERSION_LENGTH 2
 #define SNIP_TLS_CLIENT_HELLO_RANDOM_LENGTH 32
-#define SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_LENGTH 1
+#define SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_SIZE 1
 #define SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE 2
 #define SNIP_TLS_CLIENT_HELLO_COMPRESSION_METHOD_LENGTH_SIZE 1
 #define SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH 2
 
-#define SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_LENGTH 2 /* This defines the length of the whole extensions section */
+#define SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_SIZE 2 /* This defines the length of the whole extensions section */
 
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_LENGTH 2
+#define SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE 2
 
 #define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_LENGTH 1
 
 #define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_HOST_NAME 0
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LENGTH_LENGTH 2
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_NAME_LENGTH_LENGTH 2
+#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LENGTH_SIZE 2
+#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_NAME_LENGTH_SIZE 2
 
 #define SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_CLIENT_HELLO 0x01
 

@@ -804,11 +804,11 @@ snip_client_read_cb(
                 offset += SNIP_TLS_CLIENT_HELLO_VERSION_LENGTH;
 
                 offset += SNIP_TLS_CLIENT_HELLO_RANDOM_LENGTH;
-                if(offset + SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_LENGTH > available_handshake) {
+                if(offset + SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_SIZE > available_handshake) {
                     client->state = snip_pair_state_error_protocol_violation;
                     break;
                 }
-                offset += SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_LENGTH + *(handshake_data + offset);
+                offset += SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_SIZE + *(handshake_data + offset);
 
                 // Skip the variable length cipher-suite section
                 if((offset + SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE) > available_handshake) {
@@ -824,14 +824,14 @@ snip_client_read_cb(
                 }
 
                 offset += handshake_data[offset] + SNIP_TLS_CLIENT_HELLO_COMPRESSION_METHOD_LENGTH_SIZE;
-                if((offset + SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_LENGTH) > available_handshake) {
+                if((offset + SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_SIZE) > available_handshake) {
                     client->state = snip_pair_state_error_protocol_violation;
                     break;
                 }
 
 
                 memcpy(&tmp16, handshake_data + offset, sizeof(uint16_t));
-                offset += SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_LENGTH;
+                offset += SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_SIZE;
                 // SOooo many redundant lengths.  We'll track em all just to be sure.
                 extensions_section_start = offset;
                 extensions_section_length = ntohs(tmp16);
@@ -840,7 +840,7 @@ snip_client_read_cb(
                 // followed by a dynamic section.
                 while (((offset +
                          SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH +
-                         SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_LENGTH) < available_handshake) &&
+                         SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE) < available_handshake) &&
                          (extensions_section_length > (offset - extensions_section_start))
                         )
                 {
@@ -850,13 +850,13 @@ snip_client_read_cb(
 
                     memcpy(&tmp16, handshake_data + offset, sizeof(uint16_t));
                     extension_length = ntohs(tmp16);
-                    offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_LENGTH;
+                    offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE;
 
                     if(extension_id == 0)
                     {
                         memcpy(&tmp16, handshake_data + offset, sizeof(uint16_t));
                         extension_server_name_length = ntohs(tmp16);
-                        offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LENGTH_LENGTH;
+                        offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LENGTH_SIZE;
 
                         extension_server_name_offset = 0;
                         while(extension_server_name_offset < extension_server_name_length) {
@@ -866,7 +866,7 @@ snip_client_read_cb(
                             memcpy(&tmp16, handshake_data+offset+extension_server_name_offset, sizeof(uint16_t));
                             extension_server_name_blob_length = ntohs(tmp16);
                             extension_server_name_offset +=
-                                    SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_NAME_LENGTH_LENGTH;
+                                    SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_NAME_LENGTH_SIZE;
 
                             if(extension_server_name_type == SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_HOST_NAME)
                             {
