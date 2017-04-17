@@ -26,6 +26,17 @@ typedef struct snip_tls_record_s {
     const unsigned char *fragment;
 } snip_tls_record_t;
 
+typedef enum snip_tls_handshake_message_type_e {
+    snip_tls_handshake_message_type_client_hello = 0x01,
+    snip_tls_handshake_message_type_server_hello = 0x02
+} snip_tls_handshake_message_type_t;
+
+typedef struct snip_tls_handshake_message_s {
+    snip_tls_handshake_message_type_t type;
+    size_t length;
+    const unsigned char *body;
+} snip_tls_handshake_message_t;
+
 
 //
 //struct snip_TLS_random {
@@ -49,7 +60,7 @@ typedef struct snip_tls_record_s {
 #define SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH 1
 #define SNIP_TLS_HANDSHAKE_LENGTH_LENGTH 3
 // Summarize the handshake message header length
-#define SNIP_TLS_HANDSHAKE_HEADER_LENGTH SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH + SNIP_TLS_HANDSHAKE_LENGTH_LENGTH
+#define SNIP_TLS_HANDSHAKE_HEADER_LENGTH (SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH + SNIP_TLS_HANDSHAKE_LENGTH_LENGTH)
 
 #define SNIP_TLS_CLIENT_HELLO_VERSION_LENGTH 2
 #define SNIP_TLS_CLIENT_HELLO_RANDOM_LENGTH 32
@@ -71,6 +82,7 @@ typedef struct snip_tls_record_s {
 #define SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_CLIENT_HELLO 0x01
 
 #define SNIP_TLS_MAX_KNOWN_VERSION {3,3};  // TLS 1.3
+const snip_tls_version_t SNIP_TLS_MAX_KNOWN_VERSION_OBJECT = SNIP_TLS_MAX_KNOWN_VERSION;
 
 /**
  * Compare two snip_tls_version_t objects.
@@ -86,19 +98,77 @@ typedef struct snip_tls_record_s {
  */
 typedef enum snip_parser_state_e {
     snip_parser_state_error = 0,
-    snip_parser_state_record_incomplete,
-    snip_parser_state_record_parsed
+    snip_parser_state_more_data_needed,
+    snip_parser_state_parsed
 } snip_parser_state_t;
 
 /**
+ * TLS Messages are built from multiple TLS records.  In the case where messages span across two or more TLS records we
+ * have to build a buffer.  Publish this semi-publically so it can be incorporated into other snip structures.
+ */
+typedef struct snip_tls_handshake_message_parser_context_s {
+    struct evbuffer *tls_message_buffer;
+} snip_tls_handshake_message_parser_context_t;
+
+/**
+ * Reset the contents of a snip_tls_record to prepare for a new record.
+ * @param record
+ */
+void
+snip_tls_record_reset(snip_tls_record_t *record);
+
+/**
  * Find the next TLS record in the provided buffer.
- * @param input - libevent evbuffer record.
- * @param offset - Offset in bytes from the start of the evbuffer
- * @param record - A snip_tls_record object where we can store the info.
+ * @param input[in/out] - libevent evbuffer record.
+ * @param offset[in/out] - Offset in bytes from the start of the evbuffer. On a successful parse, we update this value
+ *      to the start of the next record.
+ * @param record[out] - A snip_tls_record object where we can store the info.  record->fragment is only valid until
+ *      the next evbuffer operation.  Can be NULL to indicate no offset and we don't care about the start of the next
+ *      record.
  * @return Status of the parse, see snip_parser_state_t.
  */
 snip_parser_state_t
-snip_tls_get_next_record(struct evbuffer *input, size_t offset, snip_tls_record_t *record);
+snip_tls_get_next_record(struct evbuffer *input, size_t *offset, snip_tls_record_t *record);
+
+/**
+ * Initialize the state of the of a TLS Message parser (snip_tls_message_parser_context_t)
+ * @param message_parser_context
+ */
+void
+snip_tls_handshake_message_parser_context_init(snip_tls_handshake_message_parser_context_t *message_parser_context);
+
+/**
+ * Reset the state of the of a TLS Message parser (snip_tls_handshake_message_parser_context_t)
+ * @param message_parser_context[in/out]
+ */
+void
+snip_tls_handshake_message_parser_context_reset(snip_tls_handshake_message_parser_context_t *message_parser_context);
+
+/**
+ * Reset the contents of a snip_tls_handshake_message to prepare for a new message.
+ * @param handshake_message
+ */
+void
+snip_tls_handshake_message_reset(snip_tls_handshake_message_t *handshake_message);
+
+/**
+ * Add a TLS record to the parser, and potentially get a message in return.
+ * @param message_parser_context[in/out]
+ * @param record[in]
+ * @param fragment_offset[in/out] - TLS records can contains multiple messages or incomplete messages.  We start looking
+ *      for the next message in record->fragment at *fragment_offset.  When we successfully parse a message, we update
+ *      fragment_offset. Can be NULL to indicate no offset and we don't care about the start of the next message. If we
+ *      return snip_parser_state_complete and record->length < fragment_offset, you should run this function again with
+ *      the same record and updated fragment_offset, another message fragment is in the trailing space.
+ * @return Status of the parse, see snip_parser_state_t.
+ */
+snip_parser_state_t
+snip_tls_handshake_message_parser_add_record(
+        snip_tls_handshake_message_parser_context_t *message_parser_context,
+        snip_tls_handshake_message_t *message,
+        snip_tls_record_t *record,
+        size_t *fragment_offset
+);
 
 #ifdef __cplusplus
 }
