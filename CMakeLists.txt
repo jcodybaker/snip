@@ -21,7 +21,7 @@ find_package(OpenSSL REQUIRED)
 include_directories(${OPENSSL_INCLUDE_DIR})
 set(LIBS ${LIBS} ${OPENSSL_LIBRARIES})
 
-set(SOURCE_FILES snip.c snip.h tls.h compat.h config.c config.h log.c log.h net_util.c net_util.h sys_util.c sys_util.h)
+set(SOURCE_FILES snip.c snip.h tls.h compat.h config.c config.h log.c log.h net_util.c net_util.h sys_util.c sys_util.h tls.c)
 add_executable(snip main.c ${SOURCE_FILES})
 
 target_compile_definitions(snip

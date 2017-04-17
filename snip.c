@@ -29,43 +29,31 @@
 
 #include <pthread.h>
 
-
-const struct timeval snip_shutdown_timeout = {5, 0};
-
+// Globals for signal handlers
 int snip_should_reload = 0;
 
-typedef struct snip_context_e {
-    snip_config_t *config;
-    struct evdns_base *dns_base;
-    struct event_base *event_base;
+// Constants
+const struct timeval snip_shutdown_timeout = {5, 0};
 
-    pthread_t event_thread;
-    pthread_cond_t work_for_main_thread;
-    pthread_mutex_t context_lock;
 
-    int argc;
-    char **argv;
 
-    int shutting_down;
-
-    SNIP_BOOLEAN dropped_privileges;
-
-    uint64_t next_id;
-} snip_context_t;
-
-enum snip_socket_state_e {
+/**
+ * Describe the life cycle of a socket.
+ */
+typedef enum snip_socket_state_e {
     snip_socket_state_initial = 0,
     snip_socket_state_connecting,
-
+    // server sockets start in connected after accept().
     snip_socket_state_connected,
-
+    // a socket which is both finished sending, and has received an eof is automatically close()'d.
     snip_socket_state_output_finished,
     snip_socket_state_input_eof,
 
     snip_socket_state_finished,
     snip_socket_state_error
-};
+} snip_socket_state_t;
 
+// TODO - We will pair this down in the future.
 enum snip_pair_state {
     snip_pair_state_record_header = 0,
     snip_pair_state_reading_record,
@@ -81,49 +69,6 @@ enum snip_pair_state {
     snip_pair_state_error_connect_failed,
     snip_pair_state_error_no_route
 };
-
-typedef struct snip_pair_e {
-    struct bufferevent *client_bev;
-    enum snip_socket_state_e client_state;
-
-    uint64_t id;
-    char *description;
-
-    enum snip_pair_state state;
-    size_t tls_current_record_start;
-    uint16_t tls_current_record_length;
-    uint32_t tls_current_message_length;
-
-    struct evbuffer *handshake_buffer;
-
-    struct sockaddr_storage client_address; // Hold the address locally in this structure.
-    size_t client_address_length;
-    char client_address_string[INET6_ADDRSTRLEN_WITH_PORT];
-
-    char client_local_address_string[INET6_ADDRSTRLEN_WITH_PORT];
-
-    struct bufferevent *target_bev;
-    enum snip_socket_state_e target_state;
-
-    char *target_hostname;
-    uint16_t target_port;
-    struct sockaddr_storage target_address; // Hold the address locally in this structure.
-    size_t target_address_len;
-    char target_address_string[INET6_ADDRSTRLEN_WITH_PORT];
-
-    uint16_t sni_hostname_length;
-    char *sni_hostname;
-
-    struct snip_TLS_version client_version;
-
-    snip_config_listener_t *listener;
-    snip_config_route_t *route;
-
-    snip_context_t *context;
-
-    struct evdns_getaddrinfo_request *dns_request;
-} snip_pair_t;
-
 
 // Local definitions
 /**
@@ -163,14 +108,131 @@ snip_client_read_cb(
         void *ctx
 );
 
+/**
+ * Master context for TLS SNIp.
+ */
+typedef struct snip_context_e {
+    snip_config_t *config;
+    struct evdns_base *dns_base;
+    struct event_base *event_base;
 
+    pthread_t event_thread;
+    pthread_cond_t work_for_main_thread;
+    pthread_mutex_t context_lock;
+
+    int argc;
+    char **argv;
+
+    int shutting_down;
+
+    SNIP_BOOLEAN dropped_privileges;
+
+    uint64_t next_id;
+} snip_context_t;
+
+
+typedef struct snip_pair_s {
+    uint64_t id;
+
+    // Reference back to the master context.
+    snip_context_t *context;
+
+    // These fields describe the inbound connection from the client.
+    struct bufferevent *client_bev;
+    snip_socket_state_t client_state;
+    struct sockaddr_storage client_address; // Hold the address locally in this structure.
+    size_t client_address_length;
+    char client_address_string[INET6_ADDRSTRLEN_WITH_PORT];
+    char client_local_address_string[INET6_ADDRSTRLEN_WITH_PORT];
+
+    // General description of this session
+    char *description;
+
+    // These field describe the
+    struct bufferevent *target_bev;
+    snip_socket_state_t target_state;
+    char *target_hostname;
+    uint16_t target_port;
+    struct sockaddr_storage target_address; // Hold the address locally in this structure.
+    size_t target_address_len;
+    char target_address_string[INET6_ADDRSTRLEN_WITH_PORT];
+
+    // Reference to the listener which created this session.
+    snip_config_listener_t *listener;
+
+    // Reference to the best route we've matched the session against.
+    snip_config_route_t *route;
+
+
+
+
+    enum snip_pair_state state;
+    size_t tls_current_record_start;
+    uint16_t tls_current_record_length;
+    uint32_t tls_current_message_length;
+
+    struct evbuffer *handshake_buffer;
+
+    uint16_t sni_hostname_length;
+    char *sni_hostname;
+
+    snip_tls_version_t client_version;
+
+
+    struct evdns_getaddrinfo_request *dns_request;
+} snip_session_t;
+
+
+/**
+ * Create an snip_session_t record.
+ * @return
+ */
+snip_session_t *
+snip_client_create() {
+    snip_session_t *client = (snip_session_t *) malloc(sizeof(snip_session_t));
+    memset(client, '\0', sizeof(snip_session_t));
+    return client;
+}
+
+/**
+ * Release, and if appropriate cleanup/free a snip_session_t record.
+ * @param client
+ */
+void
+snip_client_destroy(
+        snip_session_t *client
+) {
+    if(client->client_bev) {
+        bufferevent_free(client->client_bev);
+    }
+    if(client->target_bev) {
+        bufferevent_free(client->target_bev);
+    }
+    if(client->handshake_buffer) {
+        evbuffer_free(client->handshake_buffer);
+    }
+    if(client->sni_hostname) {
+        free(client->sni_hostname);
+    }
+    if(client->description) {
+        free(client->description);
+    }
+    if(client->listener) {
+        snip_config_release(client->listener->config);
+        client->listener = NULL;
+    }
+    if(client->target_hostname) {
+        free(client->target_hostname);
+    }
+    free(client);
+}
 
 /**
  * Generate a description of the current connection state and store it in client->description.
  * @param client
  */
 void
-snip_pair_set_description(snip_pair_t *client) {
+snip_pair_set_description(snip_session_t *client) {
     // This should only get longer each time, but lets be safe.
     if(client->description) {
         free(client->description);
@@ -207,11 +269,11 @@ snip_pair_set_description(snip_pair_t *client) {
     else {
         const char *format = "%016llX (%s->%s->!)";
         int needed = snprintf(NULL,
-                 0,
-                 format,
-                 client->id,
-                 client->client_address_string,
-                 client->client_local_address_string
+                              0,
+                              format,
+                              client->id,
+                              client->client_address_string,
+                              client->client_local_address_string
         );
         if(needed > 0) {
             client->description = malloc((size_t) needed + 1);
@@ -231,97 +293,149 @@ snip_pair_set_description(snip_pair_t *client) {
 }
 
 
-/**
- * Create an snip_client record.
- * @return
- */
-snip_pair_t *
-snip_client_create() {
-    snip_pair_t *client = (snip_pair_t *) malloc(sizeof(snip_pair_t));
-    memset(client, '\0', sizeof(snip_pair_t));
-    return client;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+typedef struct snip_handshake_message_parser_s {
+    struct evbuffer *source;
+    size_t tls_current_record_start;
+    uint16_t tls_current_record_length;
+    uint32_t tls_current_message_length;
+} snip_handshake_message_parser_t;
+
+typedef enum snip_handshake_message_status_e {
+    snip_handshake_message_status_need_more_data,
+    snip_handshake_message_status_error,
+    snip_handshake_message_status_complete
+} snip_handshake_message_status_t;
+
+snip_handshake_message_parser_t *
+snip_handshake_message_parser_create(struct evbuffer *source) {
+    snip_handshake_message_parser_t *parser = malloc(sizeof(snip_handshake_message_parser_t));
+    memset(parser, '\0', sizeof(snip_handshake_message_parser_t));
+    parser->source = source;
+    return parser;
 }
 
-/**
- * Release, and if appropriate cleanup/free a snip_client record.
- * @param client
- */
-void
-snip_client_destroy(
-        snip_pair_t *client
-) {
-    if(client->client_bev) {
-        bufferevent_free(client->client_bev);
-    }
-    if(client->target_bev) {
-        bufferevent_free(client->target_bev);
-    }
-    if(client->handshake_buffer) {
-        evbuffer_free(client->handshake_buffer);
-    }
-    if(client->sni_hostname) {
-        free(client->sni_hostname);
-    }
-    if(client->description) {
-        free(client->description);
-    }
-    if(client->listener) {
-        snip_config_release(client->listener->config);
-        client->listener = NULL;
-    }
-    if(client->target_hostname) {
-        free(client->target_hostname);
-    }
-    free(client);
-}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /**
  * Get the length of data held in the handshake buffer.
- * @param client
+ * @param session
  * @return
  */
 size_t
-snip_get_handshake_buffer_length(snip_pair_t *client) {
+snip_get_handshake_buffer_length(snip_session_t *session) {
     // If the ClientHello is contained in a single TLS record, we can just borrow their buffer.
-    if(!client->handshake_buffer) {
-        return client->tls_current_record_length;
+    if(!session->handshake_buffer) {
+        return session->tls_current_record_length;
     }
-    return evbuffer_get_length(client->handshake_buffer);
+    return evbuffer_get_length(session->handshake_buffer);
 }
 
 /**
  * Return a pointer to contiguous chunk of memory containing all of the handshake data we have so far.
  *
- * @param client
+ * @param session
  * @param input
  * @param pullup
  * @param available [OUT] - Number of bytes available in the buffer
  * @return The start of the handshake message buffer.
  */
 unsigned char *
-snip_get_handshake_buffer(snip_pair_t *client, struct evbuffer *input, size_t pullup, size_t *available) {
+snip_get_handshake_buffer(snip_session_t *session, struct evbuffer *input, size_t pullup, size_t *available) {
     // If the ClientHello is contained in a single TLS record, we can just borrow their buffer.
-    if(!client->handshake_buffer) {
-        *available = client->tls_current_record_length;
-        return evbuffer_pullup(input, client->tls_current_record_length + SNIP_TLS_RECORD_HEADER_LENGTH) +
+    if(!session->handshake_buffer) {
+        *available = session->tls_current_record_length;
+        return evbuffer_pullup(input, session->tls_current_record_length + SNIP_TLS_RECORD_HEADER_LENGTH) +
                SNIP_TLS_RECORD_HEADER_LENGTH;
     }
-    *available = evbuffer_get_length(client->handshake_buffer);
-    return evbuffer_pullup(client->handshake_buffer, -1);
+    *available = evbuffer_get_length(session->handshake_buffer);
+    return evbuffer_pullup(session->handshake_buffer, -1);
 }
 
 /**
  * Determin the port we should connect to on the target.  If the route we resolved doesn't specify a port, we return
  * the port the client connected on.
- * @param client
+ * @param session
  * @return
  */
 uint16_t
-snip_client_get_target_port(snip_pair_t *client) {
-    if(client->route->port) {
-        return client->route->port;
+snip_client_get_target_port(snip_session_t *session) {
+    if(session->route->port) {
+        return session->route->port;
     }
-    return client->listener->bind_port;
+    return session->listener->bind_port;
 }
 
 /**
@@ -334,10 +448,10 @@ snip_target_read_cb(
         struct bufferevent *bev,
         void *ctx
 ) {
-    snip_pair_t *client = (snip_pair_t *) ctx;
+    snip_session_t *session = (snip_session_t *) ctx;
     struct evbuffer *input_from_target = bufferevent_get_input(bev);
-    if(client->client_bev) {
-        bufferevent_write_buffer(client->client_bev, input_from_target);
+    if(session->client_bev) {
+        bufferevent_write_buffer(session->client_bev, input_from_target);
     }
     else {
         // We close the read-stream when the matching output-buffer is gone, but that could still be pending.  Discard.
@@ -353,40 +467,40 @@ snip_target_read_cb(
  */
 void
 snip_shutdown_write_buffer_on_flushed(struct bufferevent *bev, void *ctx) {
-    snip_pair_t *client = (snip_pair_t *) ctx;
+    snip_session_t *session = (snip_session_t *) ctx;
     // Safe to call this because we've already flushed the write buffer to 0.
     shutdown(bufferevent_getfd(bev), SHUT_WR);
 
-    if(bev == client->target_bev) {
-        if(client->target_state == snip_socket_state_input_eof) {
-            client->target_state = snip_socket_state_finished;
-            client->target_bev = NULL;
+    if(bev == session->target_bev) {
+        if(session->target_state == snip_socket_state_input_eof) {
+            session->target_state = snip_socket_state_finished;
+            session->target_bev = NULL;
             bufferevent_free(bev);
         }
-        else if(client->target_state == snip_socket_state_connected) {
-            client->target_state = snip_socket_state_output_finished;
+        else if(session->target_state == snip_socket_state_connected) {
+            session->target_state = snip_socket_state_output_finished;
         }
     }
-    else if(bev == client->client_bev) {
-        if(client->client_state == snip_socket_state_input_eof) {
-            client->client_state = snip_socket_state_finished;
-            client->client_bev = NULL;
+    else if(bev == session->client_bev) {
+        if(session->client_state == snip_socket_state_input_eof) {
+            session->client_state = snip_socket_state_finished;
+            session->client_bev = NULL;
             bufferevent_free(bev);
         }
-        else if(client->client_state == snip_socket_state_connected) {
-            client->client_state = snip_socket_state_output_finished;
+        else if(session->client_state == snip_socket_state_connected) {
+            session->client_state = snip_socket_state_output_finished;
         }
     }
     else {
         // This shouldn't happen, but if it does we should know it does.
-        snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "%s: Unexpected output-drained event.", client->description);
+        snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "%s: Unexpected output-drained event.", session->description);
         return;
     }
 
-    if((!client->target_bev || client->target_state == snip_socket_state_output_finished) &&
-            (!client->client_bev || client->client_state == snip_socket_state_output_finished))
+    if((!session->target_bev || session->target_state == snip_socket_state_output_finished) &&
+            (!session->client_bev || session->client_state == snip_socket_state_output_finished))
     {
-        snip_client_destroy(client);
+        snip_client_destroy(session);
     }
 }
 
@@ -395,7 +509,7 @@ snip_shutdown_write_buffer_on_flushed(struct bufferevent *bev, void *ctx) {
  * @param client
  */
 void
-snip_client_finish_writing(snip_pair_t *client) {
+snip_client_finish_writing(snip_session_t *client) {
     struct evbuffer *output = bufferevent_get_output(client->client_bev);
     size_t output_length = evbuffer_get_length(output);
     if(client->target_bev) {
@@ -419,7 +533,7 @@ snip_client_finish_writing(snip_pair_t *client) {
  * @param client
  */
 void
-snip_target_finish_writing(snip_pair_t *client) {
+snip_target_finish_writing(snip_session_t *client) {
     struct evbuffer *output = bufferevent_get_output(client->target_bev);
     size_t output_length = evbuffer_get_length(output);
     if (client->client_bev) {
@@ -450,7 +564,7 @@ snip_target_event_cb(
         short events,
         void *ctx
 ) {
-    snip_pair_t *client = (snip_pair_t *) ctx;
+    snip_session_t *client = (snip_session_t *) ctx;
     if(events & BEV_EVENT_CONNECTED) {
         client->state = snip_pair_state_proxying;
         client->target_state = snip_socket_state_connected;
@@ -548,7 +662,7 @@ snip_client_read_cb(
         struct bufferevent *bev,
         void *ctx
 ) {
-    snip_pair_t *client = (snip_pair_t *) ctx;
+    snip_session_t *client = (snip_session_t *) ctx;
 
     // Initially we're just peeking on the request, so we don't remove anything from the input buffer until we
     // understand where the client is trying to get, and have connected to their ultimate destination.
@@ -916,7 +1030,7 @@ snip_client_event_cb(
         short events,
         void *ctx
 ) {
-    snip_pair_t *client = (snip_pair_t *) ctx;
+    snip_session_t *client = (snip_session_t *) ctx;
     if (events & BEV_EVENT_ERROR) {
         int error_number = EVUTIL_SOCKET_ERROR();
         snip_log(SNIP_LOG_LEVEL_WARNING,
@@ -980,7 +1094,7 @@ snip_accept_incoming_cb(
     snip_context_t *context = listener->config->context;
 
     // Save it all to the pair
-    snip_pair_t *client = snip_client_create();
+    snip_session_t *client = snip_client_create();
     snip_config_retain(listener->config);
     client->id = context->next_id++;
     client->listener = listener;

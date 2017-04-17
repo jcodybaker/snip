@@ -12,3 +12,12 @@ target_compile_definitions(runConfigTest
 
 target_link_libraries(runConfigTest gtest gtest_main)
 target_link_libraries(runConfigTest snip_lib)
+
+add_executable(runTLSTest test-tls.cpp)
+
+target_compile_definitions(runTLSTest
+        PUBLIC SNIP_TEST_CONFIGS="${CMAKE_CURRENT_SOURCE_DIR}/configs"
+        )
+
+target_link_libraries(runTLSTest gtest gtest_main)
+target_link_libraries(runTLSTest snip_lib)
