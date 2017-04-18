@@ -13,6 +13,32 @@
 extern "C" {
 #endif
 
+/**
+ * We use this state as the return value for various parsers.  Not all parsers use all states.
+ */
+typedef enum snip_parser_state_e {
+    /**
+     * The requested data can not be parsed because the source data is invalid or in an otherwise unexpected state.
+     */
+            snip_parser_state_error = 0,
+    /**
+     * Used by stream parsers to indicate they have not yet received enough data to complete the parse.  Add more data
+     * and execute again.
+     */
+            snip_parser_state_more_data_needed,
+    /**
+     * The parse was successful and the structured data should be available. Refer to specific parser docs regarding
+     * data lifecycle.
+     */
+            snip_parser_state_parsed,
+    /**
+     * Used to indicate a non-error, null state.  For example, a 0 length record, the end of a non-streaming list, or
+     * a negative result for constrained parse.
+     */
+            snip_parser_state_not_found
+} snip_parser_state_t;
+
+
 typedef struct snip_tls_version_s {
     uint8_t major;
     uint8_t minor;
@@ -60,6 +86,24 @@ typedef struct snip_tls_client_hello_s {
     const unsigned char *extensions_data;
 } snip_tls_client_hello_t;
 
+typedef enum snip_tls_client_hello_extension_type_e {
+    snip_tls_client_hello_extension_type_server_name = 0,
+    snip_tls_client_hello_extension_type_max_fragment_length = 1,
+    snip_tls_client_hello_extension_type_client_certificate_url = 2,
+    snip_tls_client_hello_extension_type_trusted_ca_keys = 3,
+    snip_tls_client_hello_extension_type_truncated_hmac = 4,
+    snip_tls_client_hello_extension_type_status_request = 5
+} snip_tls_client_hello_extension_type_t;
+
+typedef struct snip_tls_client_hello_extension_s {
+    snip_tls_client_hello_extension_type_t type;
+    const unsigned char *data;
+    size_t length;
+} snip_tls_client_hello_extension_t;
+
+typedef enum snip_tls_client_hello_server_name_type_e {
+    snip_tls_client_hello_server_name_type_hostname = 0
+} snip_tls_client_hello_server_name_type_t;
 
 #define SNIP_TLS_RECORD_TYPE_HANDSHAKE 0x16
 #define SNIP_TLS_RECORD_HEADER_LENGTH 5
@@ -79,12 +123,16 @@ typedef struct snip_tls_client_hello_s {
 #define SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_SIZE 2 /* This defines the length of the whole extensions section */
 
 #define SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE 2
+#define SNIP_TLS_CLIENT_HELLO_EXTENSION_HEADER_LENGTH (SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE + SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH)
+
+#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LIST_LENGTH_SIZE 2
 
 #define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_LENGTH 1
 
 #define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_HOST_NAME 0
 #define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LENGTH_SIZE 2
 #define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_NAME_LENGTH_SIZE 2
+
 
 #define SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_CLIENT_HELLO 0x01
 
@@ -100,14 +148,6 @@ const snip_tls_version_t SNIP_TLS_MAX_KNOWN_VERSION_OBJECT = SNIP_TLS_MAX_KNOWN_
 #define SNIP_TLS_COMPARE_TLS_VERSION(A, OP, B) ((A.major == B.major && A.minor OP B.minor) || \
     (A.major != B.major && A.major OP B.major))
 
-/**
- * We use this state as the return value for various parsers.
- */
-typedef enum snip_parser_state_e {
-    snip_parser_state_error = 0,
-    snip_parser_state_more_data_needed,
-    snip_parser_state_parsed
-} snip_parser_state_t;
 
 /**
  * TLS Messages are built from multiple TLS records.  In the case where messages span across two or more TLS records we
@@ -175,6 +215,69 @@ snip_tls_handshake_message_parser_add_record(
         snip_tls_handshake_message_t *message,
         snip_tls_record_t *record,
         size_t *fragment_offset
+);
+
+/**
+ * Reset a snip_tls_client_hello_t to a fresh state to begin a new parse.
+ * @param client_hello
+ */
+void
+snip_tls_client_hello_reset(snip_tls_client_hello_t *client_hello);
+
+/**
+ * Parse a ClientHello handshake message from bytes to a snip_tls_client_hello_t object.
+ * @param message[in] - The source handshake message.
+ * @param client_hello[in/out] - The target client_hello struct where we will store the parsed data.
+ * @return
+ */
+snip_parser_state_t
+snip_tls_client_hello_parser(snip_tls_handshake_message_t *message, snip_tls_client_hello_t *client_hello);
+
+/**
+ * Retrieve the next extension from a TLS ClientHello message.
+ * @param client_hello[in] - Parsed TLS ClientHello message.
+ * @param extension_offset[in/out] - Our current position in the Extensions section of the ClientHello message.
+ * @param extension[in/out] - The structure where we store results.
+ * @return
+ */
+snip_parser_state_t
+snip_tls_client_hello_get_next_extension(snip_tls_client_hello_t *client_hello,
+                                         size_t *extension_offset,
+                                         snip_tls_client_hello_extension_t *extension
+);
+
+/**
+ * Find a ClientHello extension segment by extension id.
+ * @param client_hello - The parsed ClientHello record.
+ * @param type - The extension id we're looking to find.  See snip_tls_client_hello_extension_type_t for known types.
+ * @param extension - The extension object where we should store the results.
+ * @return - snip_parser_state_not_found if the specified type isn't found, snip_parser_state_error for an error, and
+ *      snip_parser_state_parsed if we found the extension.
+ */
+snip_parser_state_t
+snip_tls_client_hello_find_extension(snip_tls_client_hello_t *client_hello,
+                                     snip_tls_client_hello_extension_type_t type,
+                                     snip_tls_client_hello_extension_t *extension
+);
+
+/**
+ * Retrieve a string copy of the server_name value in the ClientHello Handshake.
+ *
+ * @warning - This function allocates a new string. The user is responsible for free()'ing it.
+ *
+ * @param client_hello[in]
+ * @param name_type[in] - The TLS standard allows for multiple name types, however currently only HostName (0x00
+ *      snip_tls_client_hello_server_name_type_hostname) is in use.
+ * @param dest_ptr[out] - Location where we can store a reference to the string. Set NULL if no appropriate server_name
+ *      is found.
+ * @param dest_size[out] - Size of the string in bytes (excluding NULL terminator).
+ * @return
+ */
+snip_parser_state_t
+snip_tls_client_hello_find_server_name(snip_tls_client_hello_t *client_hello,
+                                       snip_tls_client_hello_server_name_type_t name_type,
+                                       const unsigned char **dest_ptr,
+                                       size_t *dest_size
 );
 
 #ifdef __cplusplus

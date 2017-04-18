@@ -5,6 +5,7 @@
 #include "tls.h"
 #include "compat.h"
 #include <string.h>
+#include <stdlib.h>
 
 /**
  * Reset the contents of a snip_tls_record to prepare for a new record.
@@ -222,11 +223,20 @@ snip_tls_random_parser(const unsigned char *buffer, size_t buffer_length, size_t
     if(*offset + SNIP_TLS_CLIENT_HELLO_RANDOM_LENGTH > buffer_length) {
         return snip_parser_state_more_data_needed;
     }
-    memcpy(&(random->gmt_unix_time), buffer + *offset, sizeof(snip_tls_random_t.gmt_unix_time));
-    *offset += sizeof(snip_tls_random_t.gmt_unix_time);
-    memcpy(&(random->random_bytes), buffer + *offset, sizeof(snip_tls_random_t.random_bytes));
-    *offset += sizeof(snip_tls_random_t.random_bytes);
+    memcpy(&(random->gmt_unix_time), buffer + *offset, sizeof(random->gmt_unix_time));
+    *offset += sizeof(random->gmt_unix_time);
+    memcpy(&(random->random_bytes), buffer + *offset, sizeof(random->random_bytes));
+    *offset += sizeof(random->random_bytes);
     return snip_parser_state_parsed;
+}
+
+/**
+ * Reset a snip_tls_client_hello_t to a fresh state to begin a new parse.
+ * @param client_hello
+ */
+void
+snip_tls_client_hello_reset(snip_tls_client_hello_t *client_hello) {
+    memset(client_hello, '\0', sizeof(snip_tls_client_hello_t));
 }
 
 /**
@@ -269,7 +279,7 @@ snip_tls_client_hello_parser(snip_tls_handshake_message_t *message, snip_tls_cli
     }
     memcpy(&(tmp16), message->body + offset, sizeof(uint16_t));
     client_hello->cipher_suite_length = ntohs(tmp16);
-    offset += SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_SIZE;
+    offset += SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE;
 
     if (client_hello->cipher_suite_length + offset > message->length) {
         return snip_parser_state_error;
@@ -296,8 +306,136 @@ snip_tls_client_hello_parser(snip_tls_handshake_message_t *message, snip_tls_cli
     }
     memcpy(&tmp16, message->body + offset, sizeof(uint16_t));
     client_hello->extensions_data_length = ntohs(tmp16);
+    offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE;
 
+    if(client_hello->extensions_data_length + offset > message->length) {
+        return snip_parser_state_error;
+    }
+    client_hello->extensions_data = message->body + offset;
+    offset += client_hello->extensions_data_length;
+    return snip_parser_state_parsed;
 }
 
+/**
+ * Retrieve the next extension from a TLS ClientHello message.
+ * @param client_hello[in] - Parsed TLS ClientHello message.
+ * @param extension_offset[in/out] - Our current position in the Extensions section of the ClientHello message.
+ * @param extension[in/out] - The structure where we store results.
+ * @return
+ */
+snip_parser_state_t
+snip_tls_client_hello_get_next_extension(snip_tls_client_hello_t *client_hello,
+                                         size_t *extension_offset,
+                                         snip_tls_client_hello_extension_t *extension
+) {
+    uint16_t tmp16;
+    if(*extension_offset == client_hello->extensions_data_length) {
+        return snip_parser_state_not_found;
+    }
+    if((*extension_offset + SNIP_TLS_CLIENT_HELLO_EXTENSION_HEADER_LENGTH) > client_hello->extensions_data_length) {
+        return snip_parser_state_error;
+    }
+    memcpy(&tmp16, client_hello->extensions_data + *extension_offset, sizeof(uint16_t));
+    extension->type = (snip_tls_client_hello_extension_type_t) ntohs(tmp16);
+    *extension_offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE;
+
+    memcpy(&tmp16, client_hello->extensions_data + *extension_offset, sizeof(uint16_t));
+    extension->length = (size_t) ntohs(tmp16);
+    if(extension->length & 0xC000) {
+        return snip_parser_state_error;
+    }
+    *extension_offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH;
+    extension->data = client_hello->extensions_data + *extension_offset;
+    client_hello->extensions_data += *extension_offset;
+    return snip_parser_state_parsed;
+}
+
+/**
+ * Find a ClientHello extension segment by extension id.
+ * @param client_hello - The parsed ClientHello record.
+ * @param type - The extension id we're looking to find.  See snip_tls_client_hello_extension_type_t for known types.
+ * @param extension - The extension object where we should store the results.
+ * @return - snip_parser_state_not_found if the specified type isn't found, snip_parser_state_error for an error, and
+ *      snip_parser_state_parsed if we found the extension.
+ */
+snip_parser_state_t
+snip_tls_client_hello_find_extension(snip_tls_client_hello_t *client_hello,
+                                     snip_tls_client_hello_extension_type_t type,
+                                     snip_tls_client_hello_extension_t *extension
+)
+{
+    size_t extension_offset = 0;
+    while(TRUE) {
+        snip_parser_state_t state = snip_tls_client_hello_get_next_extension(client_hello, &extension_offset, extension);
+        if(state == snip_parser_state_parsed) {
+            if(type == extension->type) {
+                return snip_parser_state_parsed;
+            }
+        }
+        else if (state == snip_parser_state_not_found) {
+            return state;
+        }
+        else {
+            return snip_parser_state_error;
+        }
+    }
+}
+
+/**
+ * Retrieve a string copy of the server_name value in the ClientHello Handshake.
+ *
+ * @warning - This function allocates a new string. The user is responsible for free()'ing it.
+ *
+ * @param client_hello[in]
+ * @param name_type[in] - The TLS standard allows for multiple name types, however currently only HostName (0x00
+ *      snip_tls_client_hello_server_name_type_hostname) is in use.
+ * @param dest_ptr[out] - Location where we can store a reference to the string. Set NULL if no appropriate server_name
+ *      is found.
+ * @param dest_size[out] - Size of the string in bytes (excluding NULL terminator).
+ * @return
+ */
+snip_parser_state_t
+snip_tls_client_hello_find_server_name(snip_tls_client_hello_t *client_hello,
+                                       snip_tls_client_hello_server_name_type_t name_type,
+                                       const unsigned char **dest_ptr,
+                                       size_t *dest_size
+)
+{
+    snip_tls_client_hello_extension_t extension;
+    snip_parser_state_t state = snip_tls_client_hello_find_extension(client_hello,
+                                                                     snip_tls_client_hello_extension_type_server_name,
+                                                                     &extension);
+    if(state == snip_parser_state_parsed) {
+        size_t offset = 0;
+        if(extension.length < SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LIST_LENGTH_SIZE) {
+            return snip_parser_state_error;
+        }
+        uint16_t tmp16;
+        memcpy(&tmp16, extension.data + offset, sizeof(uint16_t));
+        uint16_t list_length = ntohs(tmp16);  // in bytes, not elements.
+        offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LIST_LENGTH_SIZE;
+        while(offset < extension.length &&
+                (offset - SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LIST_LENGTH_SIZE) < list_length)
+        {
+            snip_tls_client_hello_server_name_type_t type =
+                    (snip_tls_client_hello_server_name_type_t) extension.data[offset];
+            offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_LENGTH;
+            memcpy(&tmp16, extension.data + offset, sizeof(uint16_t));
+            size_t name_length = ntohs(tmp16);
+            offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LENGTH_SIZE;
+            if(type == name_type) {
+                *dest_ptr = malloc(name_length + 1);
+                memset((void *) *dest_ptr, '\0', name_length + 1);
+                memcpy((void *) *dest_ptr, extension.data + offset, name_length);
+                *dest_size = name_length;
+                return snip_parser_state_parsed;
+            }
+            offset += name_length;
+        }
+        return offset == extension.length ? snip_parser_state_not_found : snip_parser_state_error;
+    }
+    else {
+        *dest_ptr = NULL;
+        return state;
     }
 }
