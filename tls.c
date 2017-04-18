@@ -337,16 +337,19 @@ snip_tls_client_hello_get_next_extension(snip_tls_client_hello_t *client_hello,
     }
     memcpy(&tmp16, client_hello->extensions_data + *extension_offset, sizeof(uint16_t));
     extension->type = (snip_tls_client_hello_extension_type_t) ntohs(tmp16);
-    *extension_offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE;
+    *extension_offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH;
 
     memcpy(&tmp16, client_hello->extensions_data + *extension_offset, sizeof(uint16_t));
     extension->length = (size_t) ntohs(tmp16);
     if(extension->length & 0xC000) {
         return snip_parser_state_error;
     }
-    *extension_offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH;
+    if((extension->length + *extension_offset) > client_hello->extensions_data_length) {
+        return snip_parser_state_error;
+    }
+    *extension_offset += SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE;
     extension->data = client_hello->extensions_data + *extension_offset;
-    client_hello->extensions_data += *extension_offset;
+    *extension_offset += extension->length;
     return snip_parser_state_parsed;
 }
 
@@ -368,7 +371,7 @@ snip_tls_client_hello_find_extension(snip_tls_client_hello_t *client_hello,
     while(TRUE) {
         snip_parser_state_t state = snip_tls_client_hello_get_next_extension(client_hello, &extension_offset, extension);
         if(state == snip_parser_state_parsed) {
-            if(type == extension->type) {
+            if(type == extension->type && extension->length) {
                 return snip_parser_state_parsed;
             }
         }

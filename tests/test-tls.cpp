@@ -282,5 +282,44 @@ TEST(tls, snip_tls_handshake_client_hello_parse_test) {
     EXPECT_EQ(server_name_state, snip_parser_state_parsed);
     EXPECT_EQ(strlen( (const char *) sni_hostname), sni_hostname_size);
     EXPECT_STREQ("localhost", (const char *) sni_hostname);
+}
 
+TEST(tls, snip_tls_handshake_client_hello_parse_chrome_test) {
+    struct evbuffer *test_data = load_file_to_evbuffer(
+            SNIP_TEST_CAPTURES "/osx_10.12.3_chrome_57.0.2984.133_client_hello.raw");
+    EXPECT_NE(test_data, nullptr);
+    snip_tls_handshake_message_t message;
+    snip_tls_handshake_message_reset(&message);
+    snip_tls_handshake_message_parser_context_t parser_context;
+    snip_tls_handshake_message_parser_context_init(&parser_context);
+    snip_tls_record_t record;
+    snip_tls_record_reset(&record);
+    size_t record_offset = 0;
+    int records = 0;
+    while(snip_tls_get_next_record(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+        records += 1;
+        size_t fragment_offset = 0;
+        snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
+                &parser_context, &message, &record, &fragment_offset);
+        EXPECT_EQ(message_state, snip_parser_state_parsed);
+        EXPECT_EQ(message.type, snip_tls_handshake_message_type_client_hello);
+    }
+    EXPECT_EQ(records, 1);
+    snip_tls_client_hello_t client_hello;
+    snip_tls_client_hello_reset(&client_hello);
+    snip_parser_state_e client_hello_state = snip_tls_client_hello_parser(&message, &client_hello);
+    EXPECT_EQ(client_hello_state, snip_parser_state_parsed);
+    EXPECT_EQ(client_hello.client_version.major, 3);
+    EXPECT_EQ(client_hello.client_version.minor, 3);
+    const unsigned char *sni_hostname;
+    size_t sni_hostname_size;
+    snip_parser_state_t server_name_state = snip_tls_client_hello_find_server_name(
+            &client_hello,
+            snip_tls_client_hello_server_name_type_hostname,
+            &sni_hostname,
+            &sni_hostname_size
+    );
+    EXPECT_EQ(server_name_state, snip_parser_state_parsed);
+    EXPECT_EQ(strlen( (const char *) sni_hostname), sni_hostname_size);
+    EXPECT_STREQ("localhost", (const char *) sni_hostname);
 }
