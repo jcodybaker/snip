@@ -38,6 +38,27 @@ typedef enum snip_parser_state_e {
             snip_parser_state_not_found
 } snip_parser_state_t;
 
+typedef enum snip_tls_record_type_e {
+    snip_tls_record_type_alert = 21,
+    snip_tls_record_type_handshake = 22,
+    snip_tls_record_type_application_data = 23
+} snip_tls_record_type_t;
+
+typedef enum snip_tls_alert_description_e {
+    snip_tls_alert_description_close_notify = 0,
+    snip_tls_alert_description_handshake_failure = 40,
+    snip_tls_alert_description_access_denied = 49,
+    snip_tls_alert_description_decode_error = 50,
+    snip_tls_alert_description_protocol_version = 70,
+    snip_tls_alert_description_internal_error = 80,
+    snip_tls_alert_description_no_renegotiation = 100,
+    snip_tls_alert_description_unrecognized_name = 112
+} snip_tls_alert_description;
+
+typedef enum snip_tls_alert_level_e {
+    snip_tls_alert_level_warning = 1,
+    snip_tls_alert_level_fatal = 2
+} snip_tls_alert_level;
 
 typedef struct snip_tls_version_s {
     uint8_t major;
@@ -46,7 +67,7 @@ typedef struct snip_tls_version_s {
 
 //
 typedef struct snip_tls_record_s {
-    uint8_t content_type;
+    snip_tls_record_type_t content_type;
     snip_tls_version_t version;
     uint16_t length;
     const unsigned char *fragment;
@@ -86,20 +107,51 @@ typedef struct snip_tls_client_hello_s {
     const unsigned char *extensions_data;
 } snip_tls_client_hello_t;
 
-typedef enum snip_tls_client_hello_extension_type_e {
-    snip_tls_client_hello_extension_type_server_name = 0,
-    snip_tls_client_hello_extension_type_max_fragment_length = 1,
-    snip_tls_client_hello_extension_type_client_certificate_url = 2,
-    snip_tls_client_hello_extension_type_trusted_ca_keys = 3,
-    snip_tls_client_hello_extension_type_truncated_hmac = 4,
-    snip_tls_client_hello_extension_type_status_request = 5
-} snip_tls_client_hello_extension_type_t;
+typedef enum snip_tls_extension_type_e {
+    snip_tls_extension_type_server_name = 0,
+    snip_tls_extension_type_max_fragment_length = 1,
+    snip_tls_extension_type_client_certificate_url = 2,
+    snip_tls_extension_type_trusted_ca_keys = 3,
+    snip_tls_extension_type_truncated_hmac = 4,
+    snip_tls_extension_type_status_request = 5,
+    snip_tls_extension_type_user_mapping = 6,
+    snip_tls_extension_type_client_authz = 7,
+    snip_tls_extension_type_server_authz = 8,
+    snip_tls_extension_type_cert_type = 9,
+    snip_tls_extension_type_supported_groups = 10,
+    snip_tls_extension_type_ec_point_formats = 11,
+    snip_tls_extension_type_srp = 12,
+    snip_tls_extension_type_signature_algorithms = 13,
+    snip_tls_extension_type_use_srtp = 14,
+    snip_tls_extension_type_heartbeat = 15,
+    snip_tls_extension_type_application_layer_protocol_negotiation = 16,
+    snip_tls_extension_type_status_request_v2 = 17,
+    snip_tls_extension_type_signed_certificate_timestamp = 18,
+    snip_tls_extension_type_client_certificate_type = 19,
+    snip_tls_extension_type_server_certificate_type = 20,
+    snip_tls_extension_type_padding = 21,
+    snip_tls_extension_type_encrypt_then_mac = 22,
+    snip_tls_extension_type_extended_master_secret = 23,
+    snip_tls_extension_type_cached_info = 25,
 
-typedef struct snip_tls_client_hello_extension_s {
-    snip_tls_client_hello_extension_type_t type;
+    snip_tls_extension_type_session_ticket_tls = 35,
+
+    snip_tls_extension_type_key_share = 40,
+    snip_tls_extension_type_pre_shared_key = 41,
+    snip_tls_extension_type_early_data = 42,
+    snip_tls_extension_type_supported_versions = 43,
+    snip_tls_extension_type_cookie = 44,
+    snip_tls_extension_type_psk_key_exchange_modes = 45,
+    snip_tls_extension_type_certificate_authorities = 47,
+    snip_tls_extension_type_oid_filters = 48,
+    snip_tls_extension_type_renegotiation_info = 65281
+} snip_tls_extension_type_t;
+
+typedef struct snip_tls_extension_s {
+    snip_tls_extension_type_t type;
     const unsigned char *data;
     size_t length;
-} snip_tls_client_hello_extension_t;
+} snip_tls_extension_t;
 
 typedef enum snip_tls_client_hello_server_name_type_e {
     snip_tls_client_hello_server_name_type_hostname = 0
@@ -113,31 +165,32 @@ typedef enum snip_tls_client_hello_server_name_type_e {
 // Summarize the handshake message header length
 #define SNIP_TLS_HANDSHAKE_HEADER_LENGTH (SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_LENGTH + SNIP_TLS_HANDSHAKE_LENGTH_SIZE)
 
-#define SNIP_TLS_CLIENT_HELLO_VERSION_LENGTH 2
+#define SNIP_TLS_VERSION_LENGTH 2
 #define SNIP_TLS_CLIENT_HELLO_RANDOM_LENGTH 32
 #define SNIP_TLS_CLIENT_HELLO_SESSION_ID_LENGTH_SIZE 1
 #define SNIP_TLS_CLIENT_HELLO_CIPHER_SUITE_LENGTH_SIZE 2
 #define SNIP_TLS_CLIENT_HELLO_COMPRESSION_METHOD_LENGTH_SIZE 1
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH 2
+#define SNIP_TLS_EXTENSION_TYPE_LENGTH 2
 
-#define SNIP_TLS_CLIENT_HELLO_EXTENSIONS_SECTION_LENGTH_SIZE 2 /* This defines the length of the whole extensions section */
+#define SNIP_TLS_EXTENSIONS_SECTION_LENGTH_SIZE 2 /* This defines the length of the whole extensions section */
 
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE 2
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_HEADER_LENGTH (SNIP_TLS_CLIENT_HELLO_EXTENSION_LENGTH_SIZE + SNIP_TLS_CLIENT_HELLO_EXTENSION_TYPE_LENGTH)
+#define SNIP_TLS_EXTENSION_LENGTH_SIZE 2
+#define SNIP_TLS_EXTENSION_HEADER_LENGTH (SNIP_TLS_EXTENSION_LENGTH_SIZE + SNIP_TLS_EXTENSION_TYPE_LENGTH)
 
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LIST_LENGTH_SIZE 2
+#define SNIP_TLS_EXTENSION_SERVER_NAME_LIST_LENGTH_SIZE 2
 
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_LENGTH 1
+#define SNIP_TLS_EXTENSION_SERVER_NAME_TYPE_LENGTH 1
 
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_TYPE_HOST_NAME 0
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_LENGTH_SIZE 2
-#define SNIP_TLS_CLIENT_HELLO_EXTENSION_SERVER_NAME_NAME_LENGTH_SIZE 2
+#define SNIP_TLS_EXTENSION_SERVER_NAME_TYPE_HOST_NAME 0
+#define SNIP_TLS_EXTENSION_SERVER_NAME_LENGTH_SIZE 2
+#define SNIP_TLS_EXTENSION_SERVER_NAME_NAME_LENGTH_SIZE 2
 
+#define SNIP_TLS_EXTENSION_VERSION_LENGTH_SIZE 1
 
 #define SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_CLIENT_HELLO 0x01
 
 #define SNIP_TLS_MAX_KNOWN_VERSION {3,3};  // TLS 1.3
-const snip_tls_version_t SNIP_TLS_MAX_KNOWN_VERSION_OBJECT = SNIP_TLS_MAX_KNOWN_VERSION;
+static const snip_tls_version_t SNIP_TLS_MAX_KNOWN_VERSION_OBJECT = SNIP_TLS_MAX_KNOWN_VERSION;
 
 /**
  * Compare two snip_tls_version_t objects.
@@ -175,7 +228,7 @@ snip_tls_record_reset(snip_tls_record_t *record);
  * @return Status of the parse, see snip_parser_state_t.
  */
 snip_parser_state_t
-snip_tls_get_next_record(struct evbuffer *input, size_t *offset, snip_tls_record_t *record);
+snip_tls_record_get_next(struct evbuffer *input, size_t *offset, snip_tls_record_t *record);
 
 /**
  * Initialize the state of the of a TLS Message parser (snip_tls_message_parser_context_t)
@@ -243,21 +296,21 @@ snip_tls_client_hello_parser(snip_tls_handshake_message_t *message, snip_tls_cli
 snip_parser_state_t
 snip_tls_client_hello_get_next_extension(snip_tls_client_hello_t *client_hello,
                                          size_t *extension_offset,
-                                         snip_tls_client_hello_extension_t *extension
+                                         snip_tls_extension_t *extension
 );
 
 /**
  * Find a ClientHello extension segment by extension id.
  * @param client_hello - The parsed ClientHello record.
- * @param type - The extension id we're looking to find.  See snip_tls_client_hello_extension_type_t for known types.
+ * @param type - The extension id we're looking to find.  See snip_tls_extension_type_t for known types.
  * @param extension - The extension object where we should store the results.
  * @return - snip_parser_state_not_found if the specified type isn't found, snip_parser_state_error for an error, and
  *      snip_parser_state_parsed if we found the extension.
  */
 snip_parser_state_t
 snip_tls_client_hello_find_extension(snip_tls_client_hello_t *client_hello,
-                                     snip_tls_client_hello_extension_type_t type,
-                                     snip_tls_client_hello_extension_t *extension
+                                     snip_tls_extension_type_t type,
+                                     snip_tls_extension_t *extension
 );
 
 /**

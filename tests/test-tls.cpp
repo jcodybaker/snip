@@ -29,110 +29,110 @@ load_file_to_evbuffer(const char *path) {
     return out;
 }
 
-TEST(tls, snip_tls_get_next_record_test) {
+TEST(tls, snip_tls_record_get_next_test) {
     unsigned char test_data[] = {
-            SNIP_TLS_RECORD_TYPE_HANDSHAKE, 0x03, 0x02, 0x00, 0x06, 'H', 'e', 'l',
+            (uint8_t) snip_tls_record_type_handshake, 0x03, 0x02, 0x00, 0x06, 'H', 'e', 'l',
             'l', 'o', '\0'
     };
     struct evbuffer *test_data_buf = evbuffer_new();
     evbuffer_add(test_data_buf, test_data, sizeof(test_data));
     snip_tls_record_t record;
-    snip_parser_state_t state = snip_tls_get_next_record(test_data_buf, NULL, &record);
+    snip_parser_state_t state = snip_tls_record_get_next(test_data_buf, NULL, &record);
     EXPECT_EQ(state, snip_parser_state_parsed);
     EXPECT_STREQ((const char *) record.fragment, (const char *) test_data + SNIP_TLS_RECORD_HEADER_LENGTH);
     EXPECT_EQ(record.length, 6);
     EXPECT_EQ(record.version.major, 3);
     EXPECT_EQ(record.version.minor, 2);
-    EXPECT_EQ(record.content_type, SNIP_TLS_RECORD_TYPE_HANDSHAKE);
+    EXPECT_EQ(record.content_type, snip_tls_record_type_handshake);
 }
 
 
-TEST(tls, snip_tls_get_next_record_short_header_test) {
+TEST(tls, snip_tls_record_get_next_short_header_test) {
     unsigned char test_data[] = {
-            SNIP_TLS_RECORD_TYPE_HANDSHAKE, 0x03, 0x02, 0x00,
+            (uint8_t) snip_tls_record_type_handshake, 0x03, 0x02, 0x00,
     };
     struct evbuffer *test_data_buf = evbuffer_new();
     evbuffer_add(test_data_buf, test_data, sizeof(test_data));
     snip_tls_record_t record;
-    snip_parser_state_t state = snip_tls_get_next_record(test_data_buf, NULL, &record);
+    snip_parser_state_t state = snip_tls_record_get_next(test_data_buf, NULL, &record);
     EXPECT_EQ(state, snip_parser_state_more_data_needed);
 }
 
-TEST(tls, snip_tls_get_next_record_header_no_data_test) {
+TEST(tls, snip_tls_record_get_next_header_no_data_test) {
     unsigned char test_data[] = {
-            SNIP_TLS_RECORD_TYPE_HANDSHAKE, 0x03, 0x02, 0x00, 0x06
+            (uint8_t) snip_tls_record_type_handshake, 0x03, 0x02, 0x00, 0x06
     };
     struct evbuffer *test_data_buf = evbuffer_new();
     evbuffer_add(test_data_buf, test_data, sizeof(test_data));
     snip_tls_record_t record;
-    snip_parser_state_t state = snip_tls_get_next_record(test_data_buf, NULL, &record);
+    snip_parser_state_t state = snip_tls_record_get_next(test_data_buf, NULL, &record);
     EXPECT_EQ(state, snip_parser_state_more_data_needed);
 }
 
-TEST(tls, snip_tls_get_next_record_header_some_data_test) {
+TEST(tls, snip_tls_record_get_next_header_some_data_test) {
     unsigned char test_data[] = {
-            SNIP_TLS_RECORD_TYPE_HANDSHAKE, 0x03, 0x02, 0x00, 0x06, 'H'
+            (uint8_t) snip_tls_record_type_handshake, 0x03, 0x02, 0x00, 0x06, 'H'
     };
     struct evbuffer *test_data_buf = evbuffer_new();
     evbuffer_add(test_data_buf, test_data, sizeof(test_data));
     snip_tls_record_t record;
-    snip_parser_state_t state = snip_tls_get_next_record(test_data_buf, NULL, &record);
+    snip_parser_state_t state = snip_tls_record_get_next(test_data_buf, NULL, &record);
     EXPECT_EQ(state, snip_parser_state_more_data_needed);
 }
 
-TEST(tls, snip_tls_get_next_record_header_multiple_buffers_test) {
+TEST(tls, snip_tls_record_get_next_header_multiple_buffers_test) {
     unsigned char test_data[] = {
-            SNIP_TLS_RECORD_TYPE_HANDSHAKE, 0x03, 0x02, 0x00, 0x06, 'H'
+            (uint8_t) snip_tls_record_type_handshake, 0x03, 0x02, 0x00, 0x06, 'H'
     };
     struct evbuffer *test_data_buf = evbuffer_new();
     evbuffer_add_reference(test_data_buf, test_data, sizeof(test_data), NULL, NULL);
     snip_tls_record_t record;
-    snip_parser_state_t state = snip_tls_get_next_record(test_data_buf, NULL, &record);
+    snip_parser_state_t state = snip_tls_record_get_next(test_data_buf, NULL, &record);
     EXPECT_EQ(state, snip_parser_state_more_data_needed);
     unsigned char test_data_rest[] = {
             'e', 'l', 'l', 'o', '\0'
     };
     evbuffer_add_reference(test_data_buf, test_data_rest, sizeof(test_data_rest), NULL, NULL);
-    state = snip_tls_get_next_record(test_data_buf, NULL, &record);
+    state = snip_tls_record_get_next(test_data_buf, NULL, &record);
     EXPECT_EQ(state, snip_parser_state_parsed);
     EXPECT_STREQ((const char *) record.fragment, "Hello");
     EXPECT_EQ(record.length, 6);
     EXPECT_EQ(record.version.major, 3);
     EXPECT_EQ(record.version.minor, 2);
-    EXPECT_EQ(record.content_type, SNIP_TLS_RECORD_TYPE_HANDSHAKE);
+    EXPECT_EQ(record.content_type, snip_tls_record_type_handshake);
 }
 
-TEST(tls, snip_tls_get_next_record_header_multiple_records_test) {
-    // Recycle the snip_tls_get_next_record_header_multiple_buffers_test setup because we also want to make sure we
+TEST(tls, snip_tls_record_get_next_header_multiple_records_test) {
+    // Recycle the snip_tls_record_get_next_header_multiple_buffers_test setup because we also want to make sure we
     // pullup with reference to the offset.
     size_t offset = 0;
     unsigned char test_data[] = {
-            SNIP_TLS_RECORD_TYPE_HANDSHAKE, 0x03, 0x02, 0x00, 0x06, 'H'
+            (uint8_t) snip_tls_record_type_handshake, 0x03, 0x02, 0x00, 0x06, 'H'
     };
     struct evbuffer *test_data_buf = evbuffer_new();
     evbuffer_add_reference(test_data_buf, test_data, sizeof(test_data), NULL, NULL);
     snip_tls_record_t record;
-    snip_parser_state_t state = snip_tls_get_next_record(test_data_buf, &offset, &record);
+    snip_parser_state_t state = snip_tls_record_get_next(test_data_buf, &offset, &record);
     EXPECT_EQ(state, snip_parser_state_more_data_needed);
     unsigned char test_data_rest[] = {
             'e', 'l', 'l', 'o', '\0',
-            SNIP_TLS_RECORD_TYPE_HANDSHAKE, 0x03, 0x03, 0x00, 0x06, 'W', 'o', 'r', 'l', 'd', '\0'
+            (uint8_t) snip_tls_record_type_handshake, 0x03, 0x03, 0x00, 0x06, 'W', 'o', 'r', 'l', 'd', '\0'
     };
     evbuffer_add_reference(test_data_buf, test_data_rest, sizeof(test_data_rest), NULL, NULL);
-    state = snip_tls_get_next_record(test_data_buf, &offset, &record);
+    state = snip_tls_record_get_next(test_data_buf, &offset, &record);
     EXPECT_EQ(state, snip_parser_state_parsed);
     EXPECT_STREQ((const char *) record.fragment, "Hello");
     EXPECT_EQ(record.length, 6);
     EXPECT_EQ(record.version.major, 3);
     EXPECT_EQ(record.version.minor, 2);
-    EXPECT_EQ(record.content_type, SNIP_TLS_RECORD_TYPE_HANDSHAKE);
-    state = snip_tls_get_next_record(test_data_buf, &offset, &record);
+    EXPECT_EQ(record.content_type,  snip_tls_record_type_handshake);
+    state = snip_tls_record_get_next(test_data_buf, &offset, &record);
     EXPECT_EQ(state, snip_parser_state_parsed);
     EXPECT_STREQ((const char *) record.fragment, "World");
     EXPECT_EQ(record.length, 6);
     EXPECT_EQ(record.version.major, 3);
     EXPECT_EQ(record.version.minor, 3);
-    EXPECT_EQ(record.content_type, SNIP_TLS_RECORD_TYPE_HANDSHAKE);
+    EXPECT_EQ(record.content_type, snip_tls_record_type_handshake);
 
 }
 
@@ -161,7 +161,7 @@ TEST(tls, snip_tls_handshake_parse_test) {
     snip_tls_record_reset(&record);
     size_t record_offset = 0;
     int records = 0;
-    while(snip_tls_get_next_record(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+    while(snip_tls_record_get_next(test_data, &record_offset, &record) == snip_parser_state_parsed) {
         records += 1;
         size_t fragment_offset = 0;
         snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
@@ -188,7 +188,7 @@ TEST(tls, snip_tls_handshake_parse_multiple_records_test) {
     snip_tls_record_reset(&record);
     size_t record_offset = 0;
     int records = 0;
-    while(snip_tls_get_next_record(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+    while(snip_tls_record_get_next(test_data, &record_offset, &record) == snip_parser_state_parsed) {
         records += 1;
         size_t fragment_offset = 0;
         snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
@@ -216,7 +216,7 @@ TEST(tls, snip_tls_handshake_parse_multiple_records_test) {
         message_data += 1;
         message_data_bytes_remaining -= 1;
         records += 1;
-        short_record.content_type = SNIP_TLS_RECORD_TYPE_HANDSHAKE;
+        short_record.content_type = snip_tls_record_type_handshake;
         short_record.version = SNIP_TLS_MAX_KNOWN_VERSION_OBJECT;
         size_t fragment_offset = 0;
         snip_parser_state_t built_message_state = snip_tls_handshake_message_parser_add_record(
@@ -256,7 +256,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_test) {
     snip_tls_record_reset(&record);
     size_t record_offset = 0;
     int records = 0;
-    while(snip_tls_get_next_record(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+    while(snip_tls_record_get_next(test_data, &record_offset, &record) == snip_parser_state_parsed) {
         records += 1;
         size_t fragment_offset = 0;
         snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
@@ -296,7 +296,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_chrome_test) {
     snip_tls_record_reset(&record);
     size_t record_offset = 0;
     int records = 0;
-    while(snip_tls_get_next_record(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+    while(snip_tls_record_get_next(test_data, &record_offset, &record) == snip_parser_state_parsed) {
         records += 1;
         size_t fragment_offset = 0;
         snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
@@ -336,7 +336,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_edge_test) {
     snip_tls_record_reset(&record);
     size_t record_offset = 0;
     int records = 0;
-    while(snip_tls_get_next_record(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+    while(snip_tls_record_get_next(test_data, &record_offset, &record) == snip_parser_state_parsed) {
         records += 1;
         size_t fragment_offset = 0;
         snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
@@ -376,7 +376,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_old_firefox_test) {
     snip_tls_record_reset(&record);
     size_t record_offset = 0;
     int records = 0;
-    while(snip_tls_get_next_record(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+    while(snip_tls_record_get_next(test_data, &record_offset, &record) == snip_parser_state_parsed) {
         records += 1;
         size_t fragment_offset = 0;
         snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
@@ -416,7 +416,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_firefox_test) {
     snip_tls_record_reset(&record);
     size_t record_offset = 0;
     int records = 0;
-    while(snip_tls_get_next_record(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+    while(snip_tls_record_get_next(test_data, &record_offset, &record) == snip_parser_state_parsed) {
         records += 1;
         size_t fragment_offset = 0;
         snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
@@ -431,6 +431,47 @@ TEST(tls, snip_tls_handshake_client_hello_parse_firefox_test) {
     EXPECT_EQ(client_hello_state, snip_parser_state_parsed);
     EXPECT_EQ(client_hello.client_version.major, 3);
     EXPECT_EQ(client_hello.client_version.minor, 3);
+    const unsigned char *sni_hostname;
+    size_t sni_hostname_size;
+    snip_parser_state_t server_name_state = snip_tls_client_hello_find_server_name(
+            &client_hello,
+            snip_tls_client_hello_server_name_type_hostname,
+            &sni_hostname,
+            &sni_hostname_size
+    );
+    EXPECT_EQ(server_name_state, snip_parser_state_parsed);
+    EXPECT_EQ(strlen( (const char *) sni_hostname), sni_hostname_size);
+    EXPECT_STREQ("localhost", (const char *) sni_hostname);
+}
+
+TEST(tls, snip_tls_handshake_client_hello_parse_chrome_tls13_test) {
+    struct evbuffer *test_data = load_file_to_evbuffer(
+            SNIP_TEST_CAPTURES "/osx_10.12.3_chrome_60.0.3074.0_with_tls_1.3_client_hello.raw");
+    EXPECT_NE(test_data, nullptr);
+    snip_tls_handshake_message_t message;
+    snip_tls_handshake_message_reset(&message);
+    snip_tls_handshake_message_parser_context_t parser_context;
+    snip_tls_handshake_message_parser_context_init(&parser_context);
+    snip_tls_record_t record;
+    snip_tls_record_reset(&record);
+    size_t record_offset = 0;
+    int records = 0;
+    while(snip_tls_record_get_next(test_data, &record_offset, &record) == snip_parser_state_parsed) {
+        records += 1;
+        size_t fragment_offset = 0;
+        snip_parser_state_t message_state = snip_tls_handshake_message_parser_add_record(
+                &parser_context, &message, &record, &fragment_offset);
+        EXPECT_EQ(message_state, snip_parser_state_parsed);
+        EXPECT_EQ(message.type, snip_tls_handshake_message_type_client_hello);
+    }
+    EXPECT_EQ(records, 1);
+    snip_tls_client_hello_t client_hello;
+    snip_tls_client_hello_reset(&client_hello);
+    snip_parser_state_e client_hello_state = snip_tls_client_hello_parser(&message, &client_hello);
+    EXPECT_EQ(client_hello_state, snip_parser_state_parsed);
+    // Draft version 127, revision 18.
+    EXPECT_EQ(client_hello.client_version.major, 127);
+    EXPECT_EQ(client_hello.client_version.minor, 18);
     const unsigned char *sni_hostname;
     size_t sni_hostname_size;
     snip_parser_state_t server_name_state = snip_tls_client_hello_find_server_name(
