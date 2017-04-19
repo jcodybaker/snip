@@ -71,14 +71,14 @@ If the 'user' configuration value is specified, TLS SNIp drops privileges after 
 Privileges cannot be regained after they have been dropped.  Adding an additional privileged listener and reloading,
 will cause a fatal error when SNIp tries to bind the port with its reduced privileges.  
 
-### Configuration File
+### Configuration
 * "**listeners**" (**Required**) *List* - A list of listener objects, specified in the format listed below.
 * "**routes**" *(Optional) List|Dictionary* - A list of route objects, specified in the format listed below.
-* "**disable_ipv4**" *(Optional) Boolean* - Don't use IPv4 for outbound connections and don't bind IPv4 listeners for wildcard
- 'bind's. It is invalid to specify both ""
+* "**disable_ipv4**" *(Optional) Boolean* - Don't use IPv4 for outbound connections and don't bind IPv4 listeners for
+ wildcard 'bind's. It is invalid to specify both "disable_ipv4" and "disable_ipv6"
  *Note: explicitly ipv6 listeners (ex. "[::]:443") will still bind.*
-* "**disable_ipv6**" *(Optional) Boolean* - Don't use IPv4 for outbound connections and don't bind IPv4 listeners for wildcard
- 'bind's.  
+* "**disable_ipv6**" *(Optional) Boolean* - Don't use IPv4 for outbound connections and don't bind IPv4 listeners for
+ wildcard 'bind's.  
  *Note: explicitly ipv4 listeners (ex. "0.0.0.0:443") will still bind.*
 * "**user**" *(Optional, required if "group" is specified) String* - After binding the listeners, drop privileges and switch to the specified user.
 * "**group**" *(Optional) String* - After binding the listeners, drop privileges and switch to the specified group.
