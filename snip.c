@@ -58,7 +58,8 @@ typedef enum snip_session_state_e {
     snip_session_state_no_sni_hostname_found,
     snip_session_state_proxying,
     snip_session_state_tls_protocol_error,
-    snip_session_state_waiting_for_connect
+    snip_session_state_waiting_for_connect,
+    snip_session_state_shutting_down
 } snip_session_state_t;
 
 
@@ -646,9 +647,8 @@ snip_session_apply_route(snip_session_t *session, snip_config_route_t *route) {
     }
     else {
         // TODO - Right now we're implementing all other actions as a hangup.  Implement TLS Alert protocol.
-        snip_log(SNIP_LOG_LEVEL_INFO,
-                 "%s: Hanging up.",
-                 session->description);
+        snip_log(SNIP_LOG_LEVEL_INFO, "%s: Hanging up.", session->description);
+        session->state = snip_session_state_shutting_down;
         snip_session_destroy(session);
     }
 
@@ -797,6 +797,10 @@ snip_client_read_cb(
                 session->state == snip_session_state_waiting_for_connect)
         {
             bufferevent_write_buffer(session->target_bev, input_from_client);
+            return;
+        }
+        else if(session->state == snip_session_state_shutting_down)
+        {
             return;
         }
         else if(session->state == snip_session_state_tls_protocol_error) {
