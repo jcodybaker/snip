@@ -1,7 +1,6 @@
-//
-// Created by Cody Baker on 3/27/17.
-//
-
+// Copyright (c) 2017 J Cody Baker. All rights reserved.
+// Use of this source code is governed by a MIT-style license that can be
+// found in the LICENSE file.
 
 #include <string.h>
 #include <stdlib.h>
@@ -17,6 +16,21 @@
 #include "net_util.h"
 #include "sys_util.h"
 
+// Local defs.
+/**
+ * Cleanup a route object by freeing children.
+ * @param route
+ */
+void
+snip_config_route_clean(snip_config_route_t *route);
+
+/**
+ * Cleanup and free a snip_config_route_list_t object.
+ * @param route_list[in,out]
+ */
+void
+snip_config_route_list_destroy(snip_config_route_list_t *route_list);
+
 /**
  * Create a snip_config_t object.
  * @return
@@ -28,7 +42,30 @@ snip_config_create() {
     pthread_mutex_init(&(config->lock), 0);
     config->user_id = -1;
     config->group_id = -1;
+    config->default_route.action = snip_route_action_tls_fatal_unrecognized_name;
+    config->no_sni_route.action = snip_route_action_tls_fatal_unrecognized_name;
+    config->tls_error_route.action = snip_route_action_tls_fatal_decode_error;
+    // TODO - If we see something that looks like HTTP we could try to redirect them or display an error.
+    config->http_fallback_route.action = snip_route_action_tls_fatal_decode_error;
+    config->proxy_connect_failure_route.action = snip_route_action_tls_fatal_internal_error;
     return config;
+}
+
+/**
+ * Cleanup a listener object by freeing children.
+ * @param listener
+ */
+void
+snip_config_listener_clean(snip_config_listener_t *listener) {
+    if(listener->routes) {
+        snip_config_route_list_destroy(listener->routes);
+        listener->routes = NULL;
+    }
+    snip_config_route_clean(&listener->default_route);
+    snip_config_route_clean(&listener->no_sni_route);
+    snip_config_route_clean(&listener->tls_error_route);
+    snip_config_route_clean(&listener->http_fallback_route);
+    snip_config_route_clean(&listener->proxy_connect_failure_route);
 }
 
 /**
@@ -52,6 +89,7 @@ snip_config_listener_list_destroy(snip_config_listener_list_t *list) {
     if(list->next) {
         snip_config_listener_list_destroy(list->next);
     }
+    snip_config_listener_clean(&list->value);
     free(list);
 }
 
@@ -67,6 +105,20 @@ snip_config_route_list_create() {
 }
 
 /**
+ * Cleanup a route object by freeing children.
+ * @param route
+ */
+void
+snip_config_route_clean(snip_config_route_t *route) {
+    if(route->dest_hostname) {
+        free((void*) route->dest_hostname);
+    }
+    if(route->sni_hostname) {
+        free((void*) route->sni_hostname);
+    }
+}
+
+/**
  * Cleanup and free a snip_config_route_list_t object.
  * @param route_list[in,out]
  */
@@ -75,8 +127,7 @@ snip_config_route_list_destroy(snip_config_route_list_t *route_list) {
     if(route_list->next) {
         snip_config_route_list_destroy(route_list->next);
     }
-    free((void*) route_list->value.dest_hostname);
-    free((void*) route_list->value.sni_hostname);
+    snip_config_route_clean(&route_list->value);
     free(route_list);
 }
 
@@ -720,6 +771,7 @@ snip_parse_config_file(snip_config_t *config) {
             if(event.type == YAML_SCALAR_EVENT) {
                 state = snip_config_parse_state_routes_map_value;
                 current_route_item = snip_config_route_list_create();
+                current_route_item->value.action = snip_route_action_tls_passthrough;
 
                 // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
                 snip_config_route_list_t **routes_first = current_listener_item ?
@@ -783,6 +835,7 @@ snip_parse_config_file(snip_config_t *config) {
             if(event.type == YAML_MAPPING_START_EVENT) {
                 state = snip_config_parse_state_routes_list_map;
                 current_route_item = snip_config_route_list_create();
+                current_route_item->value.action = snip_route_action_tls_passthrough;
 
                 // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
                 snip_config_route_list_t **routes_first = current_listener_item ?
@@ -1006,25 +1059,6 @@ snip_listener_socket_is_equal(snip_config_listener_t *a, snip_config_listener_t 
 }
 
 /**
- * Given a pointer to an old listener configuration object, and a new one, copy the already bound socket from the old
- * to the new.
- * @param old_listener
- * @param new_listener
- */
-void
-snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener_t *new_listener) {
-    new_listener->libevent_listener_4 = old_listener->libevent_listener_4;
-    old_listener->libevent_listener_4 = NULL;
-    new_listener->libevent_listener_6 = old_listener->libevent_listener_6;
-    old_listener->libevent_listener_6 = NULL;
-    memcpy(&(new_listener->bind_address_4), &(old_listener->bind_address_4), sizeof(struct sockaddr_storage));
-    new_listener->bind_address_length_4 = old_listener->bind_address_length_4;
-    memcpy(&(new_listener->bind_address_6), &(old_listener->bind_address_6), sizeof(struct sockaddr_storage));
-    new_listener->bind_address_length_6 = old_listener->bind_address_length_6;
-    snip_config_release(old_listener->config);
-}
-
-/**
  * Increase the reference count on the snip_config.
  * @param config
  * @return - config parameter passed back so the "x = snip_config_retain(config);" pattern can be implemented.
@@ -1054,13 +1088,24 @@ snip_config_release(snip_config_t *config) {
         if(config->routes) {
             snip_config_route_list_destroy(config->routes);
         }
+        snip_config_route_clean(&config->default_route);
+        snip_config_route_clean(&config->no_sni_route);
+        snip_config_route_clean(&config->tls_error_route);
+        snip_config_route_clean(&config->http_fallback_route);
+        snip_config_route_clean(&config->proxy_connect_failure_route);
         pthread_mutex_destroy(&(config->lock));
         free(config);
     }
 }
 
+/**
+ * Determin if a given route matches the sni_hostname provided.
+ * @param route
+ * @param sni_hostname
+ * @return
+ */
 SNIP_BOOLEAN
-snip_route_matches(snip_config_route_t *route, char *sni_hostname) {
+snip_route_matches(snip_config_route_t *route, const char *sni_hostname) {
     // TODO - add support for regex
     return !strcmp(route->sni_hostname, sni_hostname);
 }
@@ -1072,7 +1117,7 @@ snip_route_matches(snip_config_route_t *route, char *sni_hostname) {
  * @return
  */
 snip_config_route_t *
-snip_find_route_for_sni_hostname(snip_config_listener_t *listener, char *sni_hostname) {
+snip_find_route_for_sni_hostname(snip_config_listener_t *listener, const char *sni_hostname) {
     snip_config_t *config = listener->config;
     snip_config_route_list_t *route_item = listener->routes;
     while(route_item) {
@@ -1088,8 +1133,73 @@ snip_find_route_for_sni_hostname(snip_config_listener_t *listener, char *sni_hos
         }
         route_item = route_item->next;
     }
-    return listener->default_route ? listener->default_route : config->default_route;
+    return snip_get_default_route(listener);
 }
+
+/**
+ * Get a route for use when we receive a ClientHello without an SNI name.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_route_for_no_sni(snip_config_listener_t *listener) {
+    snip_config_t *config = listener->config;
+    return listener->no_sni_route.action ? &listener->no_sni_route : &config->no_sni_route;
+}
+
+/**
+ * Get a route for use when we receive a ClientHello without an SNI name.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_route_for_proxy_connect_failure(snip_config_listener_t *listener) {
+    snip_config_t *config = listener->config;
+    return listener->proxy_connect_failure_route.action ?
+           &listener->proxy_connect_failure_route :
+           &config->proxy_connect_failure_route;
+}
+
+/**
+ * Get a route for use when we receive invalid TLS data.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_route_for_tls_error(snip_config_listener_t *listener) {
+    snip_config_t *config = listener->config;
+    return listener->tls_error_route.action ?
+           &listener->tls_error_route :
+           &config->tls_error_route;
+}
+
+/**
+ * Get a route for use when we see what we believe to be HTTP data instead of TLS.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_route_for_http_fallback(snip_config_listener_t *listener) {
+    snip_config_t *config = listener->config;
+    return listener->http_fallback_route.action ?
+           &listener->http_fallback_route :
+           &config->http_fallback_route;
+}
+
+/**
+ * Get a route for use when we receive a ClientHello without an SNI name.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_default_route(snip_config_listener_t *listener) {
+    snip_config_t *config = listener->config;
+    return listener->default_route.action ?
+           &listener->default_route :
+           &config->default_route;
+}
+
+
 
 /**
  * Given a route, get the hostname. We include the sni_hostname to help resolve regex parameters.
@@ -1103,3 +1213,4 @@ snip_route_and_sni_hostname_to_target_hostname(snip_config_route_t *route, const
     strcpy(hostname, route->dest_hostname);
     return hostname;
 }
+

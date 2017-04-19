@@ -174,10 +174,6 @@ This software is currently pre-1.0, meaning that while it works, the feature set
  this project or contact me at cody@codybaker.com.
 
 * Regex matching / targets
-* Chrome support - This currently fails to pull the proper SNI hostname from the request. This may be related to HTTP/2
-  or SPDY.
-* TLS test - There are currently no unit tests written for verifying our parsing of SNI. Goal is to build a set samples
-  of common TLS implementations, as well as verify edge/security cases work as expected.
 * Ability to configure default routes
 * Windows support - TLS SNIp uses libevent to smooth over lots of network API differences between BSD, Linux, and 
   Windows, so it may "Just Work".  Needs to be verified.  Likely problems in threading, and privilege drop.
@@ -196,3 +192,10 @@ This software is currently pre-1.0, meaning that while it works, the feature set
 * Multiple targets / balancing.
 * Binary packages.
 * Init scripts for system v, systemd, launchd
+* Route matching based on TLS version.
+* Ability to filter unsafe client versions and/or avoid vulnerabilities.
+* Better control of buffers.
+
+## Copyright & License
+TLS SNIp is copyright 2017 J Cody Baker. All rights reserved.  The project is licensed for use under an MIT-style
+license which can be found in the LICENSE file.  

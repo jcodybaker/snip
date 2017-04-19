@@ -1,6 +1,6 @@
-//
-// Created by Cody Baker on 4/12/17.
-//
+// Copyright (c) 2017 J Cody Baker. All rights reserved.
+// Use of this source code is governed by a MIT-style license that can be
+// found in the LICENSE file.
 
 #ifndef SNIP_SYS_UTIL_H
 #define SNIP_SYS_UTIL_H

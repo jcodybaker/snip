@@ -1,6 +1,6 @@
-//
-// Created by Cody Baker on 3/27/17.
-//
+// Copyright (c) 2017 J Cody Baker. All rights reserved.
+// Use of this source code is governed by a MIT-style license that can be
+// found in the LICENSE file.
 
 #ifndef SNIP_CONFIG_H
 #define SNIP_CONFIG_H
@@ -18,7 +18,20 @@ extern "C" {
 
 // We want to keep the context anonymous to the outside.
 
+typedef enum snip_route_action_type_e {
+    snip_route_action_undefined = 0,
+    snip_route_action_hangup,
+    snip_route_action_tls_close_notify,
+    snip_route_action_tls_fatal_handshake_failure,
+    snip_route_action_tls_fatal_protocol_version,
+    snip_route_action_tls_fatal_decode_error,
+    snip_route_action_tls_fatal_internal_error,
+    snip_route_action_tls_fatal_unrecognized_name,
+    snip_route_action_tls_passthrough
+} snip_route_action_type_t;
+
 typedef struct snip_config_route {
+    snip_route_action_type_t action;
     const char *sni_hostname;
     const char *dest_hostname;
     uint16_t port;
@@ -30,8 +43,6 @@ typedef struct snip_config_route_list {
 } snip_config_route_list_t;
 
 typedef struct snip_config_listener_e {
-    int ipv4;
-    int ipv6;
     char bind_address_string[INET6_ADDRSTRLEN_WITH_PORT];
     struct sockaddr_storage bind_address_4;
     int bind_address_length_4;
@@ -40,7 +51,11 @@ typedef struct snip_config_listener_e {
     uint16_t bind_port;
 
     snip_config_route_list_t *routes;
-    snip_config_route_t *default_route;
+    snip_config_route_t default_route;
+    snip_config_route_t no_sni_route;
+    snip_config_route_t tls_error_route;
+    snip_config_route_t http_fallback_route;
+    snip_config_route_t proxy_connect_failure_route;
 
     struct evconnlistener *libevent_listener_4;
     struct evconnlistener *libevent_listener_6;
@@ -61,7 +76,11 @@ typedef struct snip_config_e {
     snip_config_listener_list_t *listeners;
 
     snip_config_route_list_t *routes;
-    snip_config_route_t *default_route;
+    snip_config_route_t default_route;
+    snip_config_route_t no_sni_route;
+    snip_config_route_t tls_error_route;
+    snip_config_route_t http_fallback_route;
+    snip_config_route_t proxy_connect_failure_route;
 
     pthread_mutex_t lock;
     int references;
@@ -108,7 +127,47 @@ snip_config_release(snip_config_t *config);
  * @return
  */
 snip_config_route_t *
-snip_find_route_for_sni_hostname(snip_config_listener_t *listener, char *sni_hostname);
+snip_find_route_for_sni_hostname(snip_config_listener_t *listener, const char *sni_hostname);
+
+/**
+ * Get a route for use when we receive a ClientHello without an SNI name.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_route_for_no_sni(snip_config_listener_t *listener);
+
+/**
+ * Get a route for use when we receive a ClientHello without an SNI name.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_route_for_proxy_connect_failure(snip_config_listener_t *listener);
+
+/**
+ * Get a route for use when we receive invalid TLS data.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_route_for_tls_error(snip_config_listener_t *listener);
+
+/**
+ * Get a route for use when we see what we believe to be HTTP data instead of TLS.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_route_for_http_fallback(snip_config_listener_t *listener);
+
+/**
+ * Get a route for use when we receive an SNI hostname but cannot match it to a defined route.
+ * @param listener
+ * @return
+ */
+snip_config_route_t *
+snip_get_default_route(snip_config_listener_t *listener);
 
 /**
  * Given a route, get the hostname. We include the sni_hostname to help resolve regex parameters.

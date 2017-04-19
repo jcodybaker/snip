@@ -1,6 +1,6 @@
-//
-// Created by Cody Baker on 3/18/17.
-//
+// Copyright (c) 2017 J Cody Baker. All rights reserved.
+// Use of this source code is governed by a MIT-style license that can be
+// found in the LICENSE file.
 
 #ifndef SNIP_TLS_H
 #define SNIP_TLS_H
