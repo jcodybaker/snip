@@ -39,6 +39,7 @@ typedef enum snip_parser_state_e {
 } snip_parser_state_t;
 
 typedef enum snip_tls_record_type_e {
+    snip_tls_record_type_change_cipher_spec = 20,
     snip_tls_record_type_alert = 21,
     snip_tls_record_type_handshake = 22,
     snip_tls_record_type_application_data = 23

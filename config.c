@@ -1209,7 +1209,8 @@ snip_get_default_route(snip_config_listener_t *listener) {
  */
 char *
 snip_route_and_sni_hostname_to_target_hostname(snip_config_route_t *route, const char *sni_hostname) {
-    char *hostname = malloc(strlen(route->dest_hostname));
+    char *hostname = malloc(strlen(route->dest_hostname) + 1);
+    memset(hostname, '\0', strlen(route->dest_hostname) + 1);
     strcpy(hostname, route->dest_hostname);
     return hostname;
 }

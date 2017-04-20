@@ -36,6 +36,7 @@ get_uid_gid_for_username(const char *username, long *uid, long *gid)
         buffer_size = 16384;        /* Should be more than enough */
 
     buffer = malloc((size_t) buffer_size);
+    memset(buffer, '\0', buffer_size);
     if (buffer == NULL) {
         snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "Unable to allocate buffer.");
     }
@@ -92,6 +93,7 @@ get_gid_for_group_name(const char *group_name) {
         buffer_size = 16384;        /* Should be more than enough */
 
     buffer = malloc((size_t) buffer_size);
+    memset(buffer, '\0', buffer_size);
     if (buffer == NULL) {
         snip_log_fatal(SNIP_EXIT_ERROR_ASSERTION_FAILED, "Unable to allocate buffer.");
         return -1;

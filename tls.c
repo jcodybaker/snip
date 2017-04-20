@@ -38,6 +38,15 @@ snip_tls_record_get_next(struct evbuffer *input, size_t *offset, snip_tls_record
     }
     unsigned char *buffer = evbuffer_pullup(input, (*offset) + SNIP_TLS_RECORD_HEADER_LENGTH) + (*offset);
     record->content_type = (snip_tls_record_type_t) buffer[0];
+    switch(record->content_type) {
+        case snip_tls_record_type_change_cipher_spec:
+        case snip_tls_record_type_handshake:
+        case snip_tls_record_type_alert:
+        case snip_tls_record_type_application_data:
+            break;
+        default:
+            return snip_parser_state_error;
+    }
     record->version.major = buffer[1];
     record->version.minor = buffer[2];
     uint16_t network_order_size;
