@@ -13,3 +13,5 @@ listeners:
 routes:
   "www.google.com": "google.com"
   "www.yahoo.com": "yahoo.com:443"
+default_route:
+  action: hangup

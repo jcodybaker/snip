@@ -695,7 +695,7 @@ snip_session_apply_route(snip_session_t *session, snip_config_route_t *route) {
                 {
                     alert.description = snip_tls_alert_description_unrecognized_name;
                 }
-                // These versions don't look to support SNI.  Send an internal error.   
+                // These versions don't look to support SNI.  Send an internal error.
                 else
                 {
                     // These

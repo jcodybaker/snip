@@ -120,7 +120,7 @@ specified on the listener will be attempted first, followed by global routes. Ro
 and a shortcut format.
 
 ##### Long Format
-* "action" *(Optional)* - Action which should be performed if the route matches.  The value must be one of the
+* "action" *(Optional - Default: "proxy" if target specified, "hangup" otherwise.)* - Action which should be performed if the route matches.  The value must be one of the
  following.
   * "hangup" - Immediately disconnect the client connection.
   * "proxy" - Make an outbound connection to "target" and proxy reads and writes. "target" is a required 

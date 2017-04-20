@@ -853,12 +853,6 @@ snip_parse_config_file(snip_config_t *config) {
                 memcpy((void*) current_route->sni_hostname, event.data.scalar.value, event.data.scalar.length);
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
-                if(!current_route->dest_hostname || !current_route->sni_hostname) {
-                    snip_log_config(config,
-                                    &event,
-                                    SNIP_LOG_LEVEL_FATAL,
-                                    "'route' items MUST specify both a match and target.");
-                }
                 // End of the dictionary.
                 current_route_item = NULL;
                 current_route = NULL;
@@ -963,6 +957,20 @@ snip_parse_config_file(snip_config_t *config) {
                 }
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
+                if(current_route->action == snip_route_action_undefined) {
+                    if(current_route->dest_hostname) {
+                        current_route->action = snip_route_action_proxy;
+                    }
+                    else {
+                        current_route->action = snip_route_action_hangup;
+                    }
+                }
+                if(current_route->action == snip_route_action_proxy && !current_route->dest_hostname) {
+                    snip_log_config(config,
+                                    &event,
+                                    SNIP_LOG_LEVEL_FATAL,
+                                    "Route items with 'action'='proxy' must specify a 'target' parameter ");
+                }
                 if(current_route_item) {
                     state = snip_config_parse_state_routes_list;
                 }
@@ -970,6 +978,14 @@ snip_parse_config_file(snip_config_t *config) {
                     state = snip_config_parse_state_listener_item_map;
                 }
                 else {
+                    if(current_route->sni_hostname) {
+                        snip_log_config(
+                                config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "Exception routes (default_route, no_sni_route, etc.) must NOT include the "
+                                        "\"sni_hostname\" property ");
+                    }
                     state = snip_config_parse_state_root_map;
                 }
             }
