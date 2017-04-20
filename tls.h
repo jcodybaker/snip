@@ -38,6 +38,10 @@ typedef enum snip_parser_state_e {
             snip_parser_state_not_found
 } snip_parser_state_t;
 
+typedef enum snip_encoder_state_e {
+    snip_encoder_state_success = 0,
+} snip_encoder_state_t;
+
 typedef enum snip_tls_record_type_e {
     snip_tls_record_type_change_cipher_spec = 20,
     snip_tls_record_type_alert = 21,
@@ -54,12 +58,12 @@ typedef enum snip_tls_alert_description_e {
     snip_tls_alert_description_internal_error = 80,
     snip_tls_alert_description_no_renegotiation = 100,
     snip_tls_alert_description_unrecognized_name = 112
-} snip_tls_alert_description;
+} snip_tls_alert_description_t;
 
 typedef enum snip_tls_alert_level_e {
     snip_tls_alert_level_warning = 1,
     snip_tls_alert_level_fatal = 2
-} snip_tls_alert_level;
+} snip_tls_alert_level_t;
 
 typedef struct snip_tls_version_s {
     uint8_t major;
@@ -107,6 +111,11 @@ typedef struct snip_tls_client_hello_s {
     uint16_t extensions_data_length;
     const unsigned char *extensions_data;
 } snip_tls_client_hello_t;
+
+typedef struct snip_tls_alert_s {
+    snip_tls_alert_level_t level;
+    snip_tls_alert_description_t description;
+} snip_tls_alert_t;
 
 typedef enum snip_tls_extension_type_e {
     snip_tls_extension_type_server_name = 0,
@@ -190,6 +199,10 @@ typedef enum snip_tls_client_hello_server_name_type_e {
 
 #define SNIP_TLS_HANDSHAKE_MESSAGE_TYPE_CLIENT_HELLO 0x01
 
+#define SNIP_TLS_ALERT_LEVEL_LENGTH 1
+#define SNIP_TLS_ALERT_DESCRIPTION_LENGTH 1
+#define SNIP_TLS_ALERT_LENGTH (SNIP_TLS_ALERT_LEVEL_LENGTH + SNIP_TLS_ALERT_DESCRIPTION_LENGTH)
+
 #define SNIP_TLS_MAX_KNOWN_VERSION {3,3};  // TLS 1.3
 static const snip_tls_version_t SNIP_TLS_MAX_KNOWN_VERSION_OBJECT = SNIP_TLS_MAX_KNOWN_VERSION;
 
@@ -230,6 +243,25 @@ snip_tls_record_reset(snip_tls_record_t *record);
  */
 snip_parser_state_t
 snip_tls_record_get_next(struct evbuffer *input, size_t *offset, snip_tls_record_t *record);
+
+/**
+ * Given a snip_tls_record object, encode it into the provided evbuffer.
+ * @param output
+ * @param record
+ * @return
+ */
+snip_encoder_state_t
+snip_tls_record_encode(struct evbuffer *output, snip_tls_record_t *record);
+
+/**
+ * Encode a TLS alert and add it to the output buffer.
+ * @param out
+ * @param alert
+ * @param version
+ * @return
+ */
+snip_encoder_state_t
+snip_tls_alert_encode(struct evbuffer *out, snip_tls_alert_t *alert, const snip_tls_version_t *version);
 
 /**
  * Initialize the state of the of a TLS Message parser (snip_tls_message_parser_context_t)

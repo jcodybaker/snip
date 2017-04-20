@@ -66,6 +66,48 @@ snip_tls_record_get_next(struct evbuffer *input, size_t *offset, snip_tls_record
 }
 
 /**
+ * Given a snip_tls_record object, encode it into the provided evbuffer.
+ * @param output
+ * @param record
+ * @return
+ */
+snip_encoder_state_t
+snip_tls_record_encode(struct evbuffer *output, snip_tls_record_t *record) {
+    size_t estimated_size = SNIP_TLS_RECORD_HEADER_LENGTH + record->length;
+    evbuffer_expand(output, estimated_size + evbuffer_get_length(output));
+    unsigned char header_buffer[SNIP_TLS_RECORD_HEADER_LENGTH];
+    header_buffer[0] = (uint8_t) record->content_type;
+    header_buffer[1] = record->version.major;
+    header_buffer[2] = record->version.minor;
+    uint16_t tmp16 = htons(record->length);
+    memcpy(header_buffer + 3, &tmp16, sizeof(uint16_t));
+    evbuffer_add(output, &header_buffer, SNIP_TLS_RECORD_HEADER_LENGTH);
+    evbuffer_add(output, record->fragment, record->length);
+    return snip_encoder_state_success;
+}
+
+/**
+ * Encode a TLS alert and add it to the output buffer.
+ * @param out
+ * @param alert
+ * @param version
+ * @return
+ */
+snip_encoder_state_t
+snip_tls_alert_encode(struct evbuffer *out, snip_tls_alert_t *alert, const snip_tls_version_t *version) {
+    unsigned char alert_buffer[SNIP_TLS_ALERT_LENGTH];
+    alert_buffer[0] = (uint8_t) alert->level;
+    alert_buffer[1] = (uint8_t) alert->description;
+    snip_tls_record_t record;
+    record.length = SNIP_TLS_ALERT_LENGTH;
+    record.fragment = alert_buffer;
+    record.version = *version;
+    record.content_type = snip_tls_record_type_alert;
+    snip_encoder_state_t encoder_state = snip_tls_record_encode(out, &record);
+    return encoder_state;
+}
+
+/**
  * Initialize the state of the of a TLS Message parser (snip_tls_handshake_message_parser_context_t)
  * @param message_parser_context
  */

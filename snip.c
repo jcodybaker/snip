@@ -36,6 +36,14 @@ int snip_should_reload = 0;
 // Constants
 const struct timeval snip_shutdown_timeout = {5, 0};
 
+// If we need to send an alert prior to parsing a version from the ClientHello, use this version.
+static const snip_tls_version_t SNIP_TLS_ALERT_VERSION_DEFAULT = {3, 1};  // TLS 1.0
+// TLS < 1.0 does not support server_name extension.
+static const snip_tls_version_t SNIP_TLS_MINIMUM_SERVER_NAME_VERSION = {3, 1};  // TLS 1.0
+// TLS 1.2 incorporates server_name into the RFC
+static const snip_tls_version_t SNIP_TLS_GUARANTEED_SERVER_NAME_VERSION = {3, 3};  // TLS 1.2
+
+
 /**
  * Describe the life cycle of a socket.
  */
@@ -224,6 +232,49 @@ snip_session_destroy(
     }
     snip_tls_handshake_message_parser_context_reset(&(session->handshake_message_parser_context));
     free(session);
+}
+
+/**
+ * Stop sending data and signal the shutdown on the target channel.
+ * @param session
+ */
+SNIP_BOOLEAN
+snip_target_shutdown_input(snip_session_t *session) {
+    if(session->target_bev) {
+        if(session->target_state == snip_socket_state_connected ||
+           session->target_state == snip_socket_state_input_discard)
+        {
+            shutdown(bufferevent_getfd(session->target_bev), SHUT_RD);
+            return FALSE;
+        }
+        else if(session->target_state == snip_socket_state_output_finished) {
+            snip_session_destroy(session);
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/**
+ * Stop sending data and signal the shutdown on the client channel.
+ * @param session
+ */
+SNIP_BOOLEAN
+snip_client_shutdown_input(snip_session_t *session) {
+    if(session->client_bev) {
+        if(session->client_state == snip_socket_state_connected ||
+                session->client_state == snip_socket_state_input_discard)
+        {
+            shutdown(bufferevent_getfd(session->client_bev), SHUT_RD);
+            session->client_state = snip_socket_state_input_eof;
+            return FALSE;
+        }
+        else if(session->client_state == snip_socket_state_output_finished) {
+            snip_session_destroy(session);
+            return TRUE;
+        }
+    }
+    return FALSE;
 }
 
 /**
@@ -490,8 +541,9 @@ snip_target_event_cb(
                     // We won't be able to output any more client-input.  Stop reading.
                     if (session->client_state == snip_socket_state_connected ||
                         session->client_state == snip_socket_state_output_finished) {
-
-                        shutdown(bufferevent_getfd(session->client_bev), SHUT_RD);
+                        if(snip_client_shutdown_input(session)) {
+                            return;
+                        }
                     }
 
                     // Similarly, we're done reading from the target.  Finish writing to the client.
@@ -607,6 +659,69 @@ snip_session_apply_route(snip_session_t *session, snip_config_route_t *route) {
         }
         return;
     }
+    else if(route->action == snip_route_action_tls_close_notify ||
+            route->action == snip_route_action_tls_fatal_unrecognized_name ||
+            route->action == snip_route_action_tls_fatal_internal_error ||
+            route->action == snip_route_action_tls_fatal_decode_error ||
+            route->action == snip_route_action_tls_fatal_protocol_version ||
+            route->action == snip_route_action_tls_fatal_handshake_failure)
+    {
+        if(session->client_state == snip_socket_state_connected ||
+                session->client_state == snip_socket_state_input_eof)
+        {
+            if(snip_client_shutdown_input(session)) {
+                return;
+            }
+            snip_tls_alert_t alert;
+            alert.level = snip_tls_alert_level_fatal;
+            if(route->action == snip_route_action_tls_close_notify) {
+                alert.description = snip_tls_alert_description_close_notify;
+            }
+            else if(route->action == snip_route_action_tls_fatal_unrecognized_name) {
+                // TLS 1.2 (3,3) incorporates the server_name extension.  We can definitely send the "unrecognized_name"
+                // alert. If we don't have a client_version, we haven't gotten a ClientHello BUT the config is telling
+                // us to send this.  DO IT!
+                if(SNIP_TLS_COMPARE_TLS_VERSION(session->client_version, >, SNIP_TLS_GUARANTEED_SERVER_NAME_VERSION) ||
+                        session->client_version.major == 0)
+                {
+                    alert.description = snip_tls_alert_description_unrecognized_name;
+                }
+                // These versions 1.1 and 1.0 MAY include the extension.  Only send it if we got an sni_hostname from
+                // the client.
+                else if(SNIP_TLS_COMPARE_TLS_VERSION(session->client_version,
+                                                     >,
+                                                     SNIP_TLS_MINIMUM_SERVER_NAME_VERSION) &&
+                        session->sni_hostname)
+                {
+                    alert.description = snip_tls_alert_description_unrecognized_name;
+                }
+                // These versions don't look to support SNI.  Send an internal error.   
+                else
+                {
+                    // These
+                    alert.description = snip_tls_alert_description_internal_error;
+                }
+
+            }
+            else if(route->action == snip_route_action_tls_fatal_internal_error) {
+                alert.description = snip_tls_alert_description_internal_error;
+            }
+            else if(route->action == snip_route_action_tls_fatal_decode_error) {
+                alert.description = snip_tls_alert_description_decode_error;
+            }
+            else if(route->action == snip_route_action_tls_fatal_protocol_version) {
+                alert.description = snip_tls_alert_description_protocol_version;
+            }
+            else if(route->action == snip_route_action_tls_fatal_handshake_failure) {
+                alert.description = snip_tls_alert_description_handshake_failure;
+            }
+            snip_tls_alert_encode(
+                    bufferevent_get_output(session->client_bev),
+                    &alert,
+                    session->client_version.major ? &session->client_version : &SNIP_TLS_ALERT_VERSION_DEFAULT);
+            snip_client_finish_writing(session);
+        }
+    }
     else {
         // TODO - Right now we're implementing all other actions as a hangup.  Implement TLS Alert protocol.
         snip_log(SNIP_LOG_LEVEL_INFO, "%s: Hanging up.", session->description);
@@ -662,7 +777,9 @@ snip_client_read_cb(
     struct evbuffer *input_from_client = bufferevent_get_input(bev);
     while(TRUE) {
         // In a few cases we want to hold the read channel open, but discard anything the remote sends.
-        if(session->client_state == snip_socket_state_input_discard) {
+        if(session->client_state == snip_socket_state_input_discard ||
+                session->client_state == snip_socket_state_input_eof)
+        {
             evbuffer_drain(input_from_client, evbuffer_get_length(input_from_client));
             return;
         }
@@ -818,7 +935,7 @@ snip_client_event_cb(
             // We won't be able to output any more target-input.  Stop reading from the target.
             if (session->target_state== snip_socket_state_connected ||
                 session->target_state== snip_socket_state_output_finished) {
-                shutdown(bufferevent_getfd(session->target_bev), SHUT_RD);
+                snip_target_shutdown_input(session);
             }
 
             // Similarly, we're done reading from the client.  Finish writing to the target.
