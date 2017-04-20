@@ -535,7 +535,7 @@ void
 snip_session_apply_route(snip_session_t *session, snip_config_route_t *route) {
     snip_context_t *context = session->context;
     struct evbuffer *input_from_client = bufferevent_get_input(session->client_bev);
-    if(route->action == snip_route_action_tls_pass_through) {
+    if(route->action == snip_route_action_proxy) {
         session->target_state = snip_socket_state_connecting;
         session->target_bev = bufferevent_socket_new(context->event_base, -1, BEV_OPT_CLOSE_ON_FREE);
 
@@ -1240,7 +1240,6 @@ snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
         }
         new_listener = new_listener->next;
     }
-
 
     context->config = new_config;
     if(old_config) {

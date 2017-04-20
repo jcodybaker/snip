@@ -80,12 +80,24 @@ will cause a fatal error when SNIp tries to bind the port with its reduced privi
 * "**disable_ipv6**" *(Optional) Boolean* - Don't use IPv4 for outbound connections and don't bind IPv4 listeners for
  wildcard 'bind's.  
  *Note: explicitly ipv4 listeners (ex. "0.0.0.0:443") will still bind.*
-* "**user**" *(Optional, required if "group" is specified) String* - After binding the listeners, drop privileges and switch to the specified user.
+* "**user**" *(Optional, required if "group" is specified) String* - After binding the listeners, drop privileges and 
+ switch to the specified user.
 * "**group**" *(Optional) String* - After binding the listeners, drop privileges and switch to the specified group.
+* "**default_route**" *(Optional) Route Object* - Route used when the client handshake includes an SNI, but no targets
+ match. Must NOT contain "sni_hostname" property. *Default: {"action": "tls-unrecognized-name"}*.
+* "**no_sni_route**" *(Optional) Route Object* - Route used when the client handshake does NOT include an SNI, but no
+ targets match. Must NOT contain "sni_hostname" property. *Default: {"action": "tls-unrecognized-name"}*.
+* "**tls_error_route**" *(Optional) Route Object* - Route used when the client handshake is invalid or the TLS protocol
+ is otherwise violated. Must NOT contain "sni_hostname" property. *Default: {"action": "tls-decode-error"}*.
+* "**http_fallback_route**" *(Optional) Route Object* - Route used when client does not send TLS data, but instead sends
+ something that looks similar to HTTP. Must NOT contain "sni_hostname" property. *Default: {"action": "hangup"}*.
+* "**proxy_connect_failure**" *(Optional) Route Object* - Route used when we fail to connect to the specified target. 
+ Must NOT contain "sni_hostname" property. *Default: {"action": "tls-internal-error"}*.
 
 #### Listeners
 Listeners describe a configuration for a specific port which TLS SNIp will proxy. The configuration must specify at 
 least one listener.
+
 * "**bind**" (**Required**) *String|Number* - A port and optional address TLS SNIp should listen on.  
  The following formats are valid
   * "port" or "*:port" (ex. "443" or "*:443") - TLS SNIp will listen at the specified port on all IPv4 and IPv6 sockets
@@ -98,17 +110,33 @@ least one listener.
     specified address.
 * "**routes**" *(Optional) List|Dictionary* - A list of route objects, specified in the format listed below. 
 
+Additionally, listeners may override the "**default_route**", "**no_sni_route**", "**tls_error_route**", 
+ "**http_fallback_route**", "**proxy_connect_failure**" properties specified in the root.
+
+
 #### Routes
 Routes can be specified globally or on specific listeners. Routes are matched in the order of they are listed.  Routes
 specified on the listener will be attempted first, followed by global routes. Routes can be specified in a long format
 and a shortcut format.
 
 ##### Long Format
-* "sni_hostname" (**Required**) *String* - Matched against the SNI hostname transmitted in the client's connection
-  header.  This comparison is case-insensitive.
-* "target" (**Required**) *String* - An IP Address (ex. "192.168.1.1" and "192.168.1.1:443") or hostname 
-  (ex. "www.github.com" "www.github.com:443") proxy destination.  If a port is not specified, one will be inferred from
-  the listener's bind port.  Hostnames will be resolved at the time of connection.
+* "action" *(Optional)* - Action which should be performed if the route matches.  The value must be one of the
+ following.
+  * "hangup" - Immediately disconnect the client connection.
+  * "proxy" - Make an outbound connection to "target" and proxy reads and writes. "target" is a required 
+     parameter.
+  * "tls-close-notify" - Send a "close_notify" TLS fatal alert to the client and then immediately disconnect. 
+  * "tls-handshake-failure" - Send a "handshake_failure" TLS fatal alert to the client and then immediately disconnect. 
+  * "tls-protocol-version" - Send a "protocol_version" TLS fatal alert to the client and then immediately disconnect. 
+  * "tls-decode-error" - Send a "decode_error" TLS fatal alert to the client and then immediately disconnect. 
+  * "tls-internal-error" - Send a "internal_error" TLS fatal alert to the client and then immediately disconnect. 
+  * "tls-unrecognized-name" - Send a "unrecognized_name" TLS fatal alert to the client and then immediately disconnect. 
+  
+* "sni_hostname" *(Required in "routes" section) String* - Matched against the SNI hostname transmitted in the client's
+ connection header.  This comparison is case-insensitive.
+* "target" *(Required if action="proxy") String* - An IP Address (ex. "192.168.1.1" and "192.168.1.1:443") or hostname 
+ (ex. "www.github.com" "www.github.com:443") proxy destination.  If a port is not specified, one will be inferred from
+ the listener's bind port.  Hostnames will be resolved at the time of connection.
   
 ##### Shortcut Format
 The "routes" section can be specified as dictionary where the key is the "sni_hostname" (see above) and the value maps
@@ -174,7 +202,6 @@ This software is currently pre-1.0, meaning that while it works, the feature set
  this project or contact me at cody@codybaker.com.
 
 * Regex matching / targets
-* Ability to configure default routes
 * Windows support - TLS SNIp uses libevent to smooth over lots of network API differences between BSD, Linux, and 
   Windows, so it may "Just Work".  Needs to be verified.  Likely problems in threading, and privilege drop.
 * International URLs

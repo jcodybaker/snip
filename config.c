@@ -831,7 +831,7 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_state_routes_map_value;
                 current_route_item = snip_config_route_list_create();
                 current_route = &current_route_item->value;
-                current_route->action = snip_route_action_tls_pass_through;
+                current_route->action = snip_route_action_proxy;
 
                 // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
                 snip_config_route_list_t **routes_first = current_listener_item ?
@@ -898,7 +898,7 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_state_route_verbose_map;
                 current_route_item = snip_config_route_list_create();
                 current_route = &current_route_item->value;
-                current_route->action = snip_route_action_tls_pass_through;
+                current_route->action = snip_route_action_proxy;
 
                 // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
                 snip_config_route_list_t **routes_first = current_listener_item ?
@@ -1017,11 +1017,9 @@ snip_parse_config_file(snip_config_t *config) {
                 {
                     current_route->action = snip_route_action_hangup;
                 }
-                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "pass-through") ||
-                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "pass_through") ||
-                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "passthrough"))
+                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "proxy"))
                 {
-                    current_route->action = snip_route_action_tls_pass_through;
+                    current_route->action = snip_route_action_proxy;
                 }
                 else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls-close-notify") ||
                         !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls_close_notify") ||

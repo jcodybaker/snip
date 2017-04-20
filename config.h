@@ -29,7 +29,7 @@ typedef enum snip_route_action_type_e {
     snip_route_action_tls_fatal_decode_error,
     snip_route_action_tls_fatal_internal_error,
     snip_route_action_tls_fatal_unrecognized_name,
-    snip_route_action_tls_pass_through
+    snip_route_action_proxy
 } snip_route_action_type_t;
 
 typedef struct snip_config_route {
