@@ -1186,7 +1186,7 @@ snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
     while(new_listener) {
         old_listener = old_config ? old_config->listeners : NULL;
         while(old_listener) {
-            if(old_listener->value.libevent_listener_4 &&
+            if((old_listener->value.libevent_listener_4 || old_listener->value.libevent_listener_6) &&
                snip_listener_socket_is_equal(&(old_listener->value), &(new_listener->value)))
             {
                 snip_listener_replace(&(old_listener->value), &(new_listener->value));
@@ -1194,7 +1194,7 @@ snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
             }
             old_listener = old_listener->next;
         }
-        if(!new_listener->value.libevent_listener_4) {
+        if(!new_listener->value.libevent_listener_4 && !new_listener->value.libevent_listener_6) {
             // We're not already listening on this port/interface.  Start.
             snip_listen(context, new_config, &(new_listener->value));
         }
@@ -1208,6 +1208,12 @@ snip_replace_config(evutil_socket_t fd, short events, void *ctx) {
             // We won't be accepting any new connections.  In-progress connections retain the config individually.
             snip_config_release(old_config);
             old_listener->value.libevent_listener_4 = NULL;
+        }
+        if(old_listener->value.libevent_listener_6) {
+            evconnlistener_free(old_listener->value.libevent_listener_6);
+            // We won't be accepting any new connections.  In-progress connections retain the config individually.
+            snip_config_release(old_config);
+            old_listener->value.libevent_listener_6 = NULL;
         }
         old_listener = old_listener->next;
     }
