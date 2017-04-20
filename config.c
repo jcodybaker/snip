@@ -16,6 +16,8 @@
 #include "net_util.h"
 #include "sys_util.h"
 
+#include <event2/util.h>
+
 // Local defs.
 /**
  * Cleanup a route object by freeing children.
@@ -45,8 +47,21 @@ snip_config_create() {
     config->default_route.action = snip_route_action_tls_fatal_unrecognized_name;
     config->no_sni_route.action = snip_route_action_tls_fatal_unrecognized_name;
     config->tls_error_route.action = snip_route_action_tls_fatal_decode_error;
+
     // TODO - If we see something that looks like HTTP we could try to redirect them or display an error.
-    config->http_fallback_route.action = snip_route_action_tls_fatal_decode_error;
+    const char *http_fallback_message =
+            "HTTP/1.1 400 Bad Request\r\n"
+            "Connection: close\r\n"
+            "Context-Type: test/html;\r\n"
+            "\r\n"
+            ""
+            "<html><head></head><body><h1>You must use HTTPS to access this service.</h1></body></html>\n";
+    const size_t http_fallback_message_length = strlen(http_fallback_message);
+    config->http_fallback_route.send_text = malloc(strlen(http_fallback_message) + 1);
+    memset((void*)config->http_fallback_route.send_text, '\0', strlen(http_fallback_message) + 1);
+    memcpy((void*)config->http_fallback_route.send_text, http_fallback_message, http_fallback_message_length);
+    config->http_fallback_route.action = snip_route_action_send_text;
+
     config->proxy_connect_failure_route.action = snip_route_action_tls_fatal_internal_error;
     return config;
 }
@@ -115,6 +130,12 @@ snip_config_route_clean(snip_config_route_t *route) {
     }
     if(route->sni_hostname) {
         free((void*) route->sni_hostname);
+    }
+    if(route->send_file) {
+        free((void*) route->send_file);
+    }
+    if(route->send_text) {
+        free((void*) route->send_text);
     }
 }
 
@@ -244,6 +265,7 @@ snip_log_config(snip_config_t *config, yaml_event_t *event, snip_log_level_t lev
                                         event->end_mark.line,
                                         event->end_mark.column);
     char *buffer = malloc(buffer_max);
+    memset(buffer, '\0', buffer_max);
     snprintf(buffer,
                     buffer_max,
                     config_error_msg,
@@ -358,6 +380,7 @@ snip_parse_target(const char *target, const char **hostname, uint16_t *port) {
     else {
         hostname_length = strlen(target) + 1;
         *hostname = malloc(hostname_length);
+        memset((void*) *hostname, '\0', hostname_length);
         strcpy((void*) *hostname, target);
         *port = 0;
         return 1;
@@ -420,10 +443,19 @@ snip_parse_config_file(snip_config_t *config) {
         snip_config_parse_state_disable_ipv4_rvalue,
         snip_config_parse_state_disable_ipv6_rvalue,
 
+        snip_config_parse_state_default_route_rvalue,
+        snip_config_parse_state_no_sni_route_rvalue,
+        snip_config_parse_state_tls_error_route_rvalue,
+        snip_config_parse_state_http_fallback_route_rvalue,
+        snip_config_parse_state_proxy_connect_failure_route_rvalue,
+
         snip_config_parse_state_routes_list,
-        snip_config_parse_state_routes_list_map,
-        snip_config_parse_state_routes_list_map_sni_hostname_value,
-        snip_config_parse_state_routes_list_map_target_value,
+        snip_config_parse_state_route_verbose_map,
+        snip_config_parse_state_route_verbose_map_sni_hostname_rvalue,
+        snip_config_parse_state_route_verbose_target_rvalue,
+        snip_config_parse_state_route_verbose_action_rvalue,
+        snip_config_parse_state_route_verbose_send_file_rvalue,
+        snip_config_parse_state_route_verbose_send_text_rvalue,
 
         snip_config_parse_state_routes_map,
         snip_config_parse_state_routes_map_value,
@@ -444,6 +476,7 @@ snip_parse_config_file(snip_config_t *config) {
 
     snip_config_listener_list_t *current_listener_item = NULL;
     snip_config_route_list_t *current_route_item = NULL;
+    snip_config_route_t *current_route = NULL;
 
     // We skip unknown keys (though we do warn).  If the associated value is a map or sequence we need to discard
     // all children until we complete that value.
@@ -547,6 +580,21 @@ snip_parse_config_file(snip_config_t *config) {
                 else if(!strcmp((const char *) event.data.scalar.value, "disable_ipv6")) {
                     state = snip_config_parse_state_disable_ipv6_rvalue;
                 }
+                else if(!strcmp((const char *) event.data.scalar.value, "default_route")) {
+                    state = snip_config_parse_state_default_route_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "no_sni_route")) {
+                    state = snip_config_parse_state_no_sni_route_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "tls_error_route")) {
+                    state = snip_config_parse_state_tls_error_route_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "http_fallback_route")) {
+                    state = snip_config_parse_state_http_fallback_route_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "proxy_connect_failure")) {
+                    state = snip_config_parse_state_proxy_connect_failure_route_rvalue;
+                }
                 else {
                     // We don't recognize this key. We log it as a warning, and make plans to skip the associated value.
                     state_after_skip = state;
@@ -589,6 +637,7 @@ snip_parse_config_file(snip_config_t *config) {
             if(event.type == YAML_MAPPING_START_EVENT) {
                 // Ok, time to create a new listener.
                 current_listener_item = snip_config_listener_list_create();
+                current_listener_item->value.config = config;
                 if(!config->listeners) {
                     config->listeners = current_listener_item;
                 }
@@ -716,9 +765,6 @@ snip_parse_config_file(snip_config_t *config) {
             }
         }
         else if(state == snip_config_parse_state_disable_ipv4_rvalue) {
-            // The "routes" key is valid in both the root (as a global default) and within listener config objects.
-            // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
-            // shortcut dictionary format.  We figure out which format we have here.
             if(event.type == YAML_SCALAR_EVENT && snip_parse_boolean(&event, &(config->disable_ipv4))) {
                 state = snip_config_parse_state_root_map;
             }
@@ -731,9 +777,6 @@ snip_parse_config_file(snip_config_t *config) {
             }
         }
         else if(state == snip_config_parse_state_disable_ipv6_rvalue) {
-            // The "routes" key is valid in both the root (as a global default) and within listener config objects.
-            // With the key, we now need to parse the value. We accept two formats: a list of dictionaries, and a
-            // shortcut dictionary format.  We figure out which format we have here.
             if(event.type == YAML_SCALAR_EVENT && snip_parse_boolean(&event, &(config->disable_ipv6))) {
                 state = snip_config_parse_state_root_map;
             }
@@ -742,6 +785,22 @@ snip_parse_config_file(snip_config_t *config) {
                                 &event,
                                 SNIP_LOG_LEVEL_FATAL,
                                 "The 'disable_ipv6' property must be a boolean.");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if(state == snip_config_parse_state_default_route_rvalue) {
+            if(event.type == YAML_MAPPING_START_EVENT) {
+                state = snip_config_parse_state_route_verbose_map;
+                current_route_item = NULL;
+                current_route = current_listener_item ?
+                                &current_listener_item->value.default_route :
+                                &config->default_route;
+            }
+            else if(event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "The 'default_route' property must be a boolean.");
                 state = snip_config_parse_state_error;
             }
         }
@@ -771,7 +830,8 @@ snip_parse_config_file(snip_config_t *config) {
             if(event.type == YAML_SCALAR_EVENT) {
                 state = snip_config_parse_state_routes_map_value;
                 current_route_item = snip_config_route_list_create();
-                current_route_item->value.action = snip_route_action_tls_passthrough;
+                current_route = &current_route_item->value;
+                current_route->action = snip_route_action_tls_pass_through;
 
                 // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
                 snip_config_route_list_t **routes_first = current_listener_item ?
@@ -788,11 +848,12 @@ snip_parse_config_file(snip_config_t *config) {
                     }
                     route_item->next = current_route_item;
                 }
-                current_route_item->value.sni_hostname = malloc(event.data.scalar.length);
-                memcpy((void*) current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
+                current_route->sni_hostname = malloc(event.data.scalar.length + 1);
+                memset((void*) current_route->sni_hostname, '\0', event.data.scalar.length + 1);
+                memcpy((void*) current_route->sni_hostname, event.data.scalar.value, event.data.scalar.length);
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
-                if(!current_route_item->value.dest_hostname || !current_route_item->value.sni_hostname) {
+                if(!current_route->dest_hostname || !current_route->sni_hostname) {
                     snip_log_config(config,
                                     &event,
                                     SNIP_LOG_LEVEL_FATAL,
@@ -800,6 +861,7 @@ snip_parse_config_file(snip_config_t *config) {
                 }
                 // End of the dictionary.
                 current_route_item = NULL;
+                current_route = NULL;
                 state = current_listener_item ?
                         snip_config_parse_state_listener_item_map : snip_config_parse_state_root_map;
             }
@@ -817,8 +879,8 @@ snip_parse_config_file(snip_config_t *config) {
             if(event.type == YAML_SCALAR_EVENT) {
                 state = snip_config_parse_state_routes_map;
                 snip_parse_target((const char *) event.data.scalar.value,
-                                  &(current_route_item->value.dest_hostname),
-                                  &(current_route_item->value.port));
+                                  &(current_route->dest_hostname),
+                                  &(current_route->port));
             }
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(
@@ -833,9 +895,10 @@ snip_parse_config_file(snip_config_t *config) {
             // We're currently parsing a 'routes' section which is defined in the more verbose list-of-dictionaries
             // format.  We expect to find either the start of a new dictionary, or an end-of-list event.
             if(event.type == YAML_MAPPING_START_EVENT) {
-                state = snip_config_parse_state_routes_list_map;
+                state = snip_config_parse_state_route_verbose_map;
                 current_route_item = snip_config_route_list_create();
-                current_route_item->value.action = snip_route_action_tls_passthrough;
+                current_route = &current_route_item->value;
+                current_route->action = snip_route_action_tls_pass_through;
 
                 // If we have a current_listener_item this route belongs to a listener, otherwise its global default.
                 snip_config_route_list_t **routes_first = current_listener_item ?
@@ -867,15 +930,24 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_state_error;
             }
         }
-        else if(state == snip_config_parse_state_routes_list_map) {
+        else if(state == snip_config_parse_state_route_verbose_map) {
             // We're inside a route-definition that uses the more verbose list-of-dictionary format.  We're in that
             // dictionary looking at the key.
             if(event.type == YAML_SCALAR_EVENT) {
                 if(!strcmp((const char *) event.data.scalar.value, "sni_hostname")) {
-                    state = snip_config_parse_state_routes_list_map_sni_hostname_value;
+                    state = snip_config_parse_state_route_verbose_map_sni_hostname_rvalue;
                 }
                 else if(!strcmp((const char *) event.data.scalar.value, "target")) {
-                    state = snip_config_parse_state_routes_list_map_target_value;
+                    state = snip_config_parse_state_route_verbose_target_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "action")) {
+                    state = snip_config_parse_state_route_verbose_action_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "send_file")) {
+                    state = snip_config_parse_state_route_verbose_send_file_rvalue;
+                }
+                else if(!strcmp((const char *) event.data.scalar.value, "send_text")) {
+                    state = snip_config_parse_state_route_verbose_send_text_rvalue;
                 }
                 else {
                     // We don't recognize this key. We log it as a warning, and make plans to skip the associated value.
@@ -891,18 +963,27 @@ snip_parse_config_file(snip_config_t *config) {
                 }
             }
             else if(event.type == YAML_MAPPING_END_EVENT) {
-                state = snip_config_parse_state_routes_list;
+                if(current_route_item) {
+                    state = snip_config_parse_state_routes_list;
+                }
+                else if(current_listener_item) {
+                    state = snip_config_parse_state_listener_item_map;
+                }
+                else {
+                    state = snip_config_parse_state_root_map;
+                }
             }
             else if(event.type != YAML_NO_EVENT) {
                 snip_log_config(config, &event, SNIP_LOG_LEVEL_FATAL, "Key had unexpected type ");
                 state = snip_config_parse_state_error;
             }
         }
-        else if (state == snip_config_parse_state_routes_list_map_sni_hostname_value) {
+        else if (state == snip_config_parse_state_route_verbose_map_sni_hostname_rvalue) {
             if(event.type == YAML_SCALAR_EVENT) {
-                current_route_item->value.sni_hostname = malloc(event.data.scalar.length);
-                memcpy((void*) current_route_item->value.sni_hostname, event.data.scalar.value, event.data.scalar.length);
-                state = snip_config_parse_state_routes_list_map;
+                current_route->sni_hostname = malloc(event.data.scalar.length + 1);
+                memset((void*) current_route->sni_hostname, '\0', event.data.scalar.length + 1);
+                memcpy((void*) current_route->sni_hostname, event.data.scalar.value, event.data.scalar.length);
+                state = snip_config_parse_state_route_verbose_map;
             }
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
@@ -912,17 +993,124 @@ snip_parse_config_file(snip_config_t *config) {
                 state = snip_config_parse_state_error;
             }
         }
-        else if (state == snip_config_parse_state_routes_list_map_target_value) {
+        else if (state == snip_config_parse_state_route_verbose_target_rvalue) {
             if(event.type == YAML_SCALAR_EVENT) {
-                current_route_item->value.dest_hostname = malloc(event.data.scalar.length);
-                memcpy((void*) current_route_item->value.dest_hostname, event.data.scalar.value, event.data.scalar.length);
-                state = snip_config_parse_state_routes_list_map;
+                snip_parse_target((const char *) event.data.scalar.value,
+                                  &(current_route->dest_hostname),
+                                  &(current_route->port));
+                state = snip_config_parse_state_route_verbose_map;
             }
             else if (event.type != YAML_NO_EVENT) {
                 snip_log_config(config,
                                 &event,
                                 SNIP_LOG_LEVEL_FATAL,
                                 "Route property 'target' expects a string value ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if (state == snip_config_parse_state_route_verbose_action_rvalue) {
+            if(event.type == YAML_SCALAR_EVENT) {
+                state = snip_config_parse_state_route_verbose_map;
+                if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "hangup") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "hang-up") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "hang_up"))
+                {
+                    current_route->action = snip_route_action_hangup;
+                }
+                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "pass-through") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "pass_through") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "passthrough"))
+                {
+                    current_route->action = snip_route_action_tls_pass_through;
+                }
+                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls-close-notify") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls_close_notify") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls_closenotify") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "close-notify") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "close_notify") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "closenotify"))
+                {
+                    current_route->action = snip_route_action_tls_close_notify;
+                }
+                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls-handshake-failure") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls_handshake_failure") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "handshake-failure") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "handshake_failure"))
+                {
+                    current_route->action = snip_route_action_tls_fatal_handshake_failure;
+                }
+                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls-protocol-version") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls_protocol_version") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "protocol-version") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "protocol_version"))
+                {
+                    current_route->action = snip_route_action_tls_fatal_protocol_version;
+                }
+                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls-decode-error") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls_decode_error") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "decode-error") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "decode_error"))
+                {
+                    current_route->action = snip_route_action_tls_fatal_decode_error;
+                }
+                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls-internal-error") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls_internal_error") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "internal-error") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "internal_error"))
+                {
+                    current_route->action = snip_route_action_tls_fatal_internal_error;
+                }
+                else if(!evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls-unrecognized-name") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "tls_unrecognized_name") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "unrecognized-name") ||
+                        !evutil_ascii_strcasecmp((const char *) event.data.scalar.value, "unrecognized_name"))
+                {
+                    current_route->action = snip_route_action_tls_fatal_unrecognized_name;
+                }
+                else {
+                    snip_log_config(config,
+                                    &event,
+                                    SNIP_LOG_LEVEL_FATAL,
+                                    "Route property 'action' had unexpected value '%s'",
+                                    event.data.scalar.value);
+                    state = snip_config_parse_state_error;
+                }
+            }
+            else if (event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "Route property 'action' expects a string value ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if (state == snip_config_parse_state_route_verbose_send_file_rvalue) {
+            if(event.type == YAML_SCALAR_EVENT) {
+                current_route->send_file = malloc(event.data.scalar.length + 1);
+                memset((void*) current_route->send_file, '\0', event.data.scalar.length + 1);
+                memcpy((void*) current_route->send_file, event.data.scalar.value, event.data.scalar.length);
+                state = snip_config_parse_state_route_verbose_map;
+            }
+            else if (event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "Route property 'send_file' expects a string value ");
+                state = snip_config_parse_state_error;
+            }
+        }
+        else if (state == snip_config_parse_state_route_verbose_send_text_rvalue) {
+            if(event.type == YAML_SCALAR_EVENT) {
+                current_route->send_text = malloc(event.data.scalar.length + 1);
+                memset((void*) current_route->send_text, '\0', event.data.scalar.length + 1);
+                memcpy((void*) current_route->send_text, event.data.scalar.value, event.data.scalar.length);
+                state = snip_config_parse_state_route_verbose_map;
+            }
+            else if (event.type != YAML_NO_EVENT) {
+                snip_log_config(config,
+                                &event,
+                                SNIP_LOG_LEVEL_FATAL,
+                                "Route property 'send_text' expects a string value ");
                 state = snip_config_parse_state_error;
             }
         }

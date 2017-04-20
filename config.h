@@ -21,19 +21,23 @@ extern "C" {
 typedef enum snip_route_action_type_e {
     snip_route_action_undefined = 0,
     snip_route_action_hangup,
+    snip_route_action_send_file,
+    snip_route_action_send_text,
     snip_route_action_tls_close_notify,
     snip_route_action_tls_fatal_handshake_failure,
     snip_route_action_tls_fatal_protocol_version,
     snip_route_action_tls_fatal_decode_error,
     snip_route_action_tls_fatal_internal_error,
     snip_route_action_tls_fatal_unrecognized_name,
-    snip_route_action_tls_passthrough
+    snip_route_action_tls_pass_through
 } snip_route_action_type_t;
 
 typedef struct snip_config_route {
     snip_route_action_type_t action;
     const char *sni_hostname;
     const char *dest_hostname;
+    const char *send_text;
+    const char *send_file;
     uint16_t port;
 } snip_config_route_t;
 

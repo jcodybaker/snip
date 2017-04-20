@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <fcntl.h>
 
 #include <signal.h>
 
@@ -46,6 +47,7 @@ typedef enum snip_socket_state_e {
     // a socket which is both finished sending, and has received an eof is automatically close()'d.
     snip_socket_state_output_finished,
     snip_socket_state_input_eof,
+    snip_socket_state_input_discard,
 
     snip_socket_state_finished,
     snip_socket_state_error
@@ -58,8 +60,7 @@ typedef enum snip_session_state_e {
     snip_session_state_no_sni_hostname_found,
     snip_session_state_proxying,
     snip_session_state_tls_protocol_error,
-    snip_session_state_waiting_for_connect,
-    snip_session_state_shutting_down
+    snip_session_state_waiting_for_connect
 } snip_session_state_t;
 
 
@@ -87,7 +88,7 @@ typedef struct snip_context_e {
 } snip_context_t;
 
 
-typedef struct snip_pair_s {
+typedef struct snip_session_s {
     uint64_t id;
 
     // Reference back to the master context.
@@ -290,77 +291,6 @@ snip_pair_set_description(snip_session_t *session) {
     }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 /**
  * Determin the port we should connect to on the target.  If the route we resolved doesn't specify a port, we return
  * the port the client connected on.
@@ -409,7 +339,9 @@ snip_shutdown_write_buffer_on_flushed(struct bufferevent *bev, void *ctx) {
     shutdown(bufferevent_getfd(bev), SHUT_WR);
 
     if(bev == session->target_bev) {
-        if(session->target_state == snip_socket_state_input_eof) {
+        if(session->target_state == snip_socket_state_input_eof ||
+                session->target_state == snip_socket_state_input_discard)
+        {
             session->target_state = snip_socket_state_finished;
             session->target_bev = NULL;
             bufferevent_free(bev);
@@ -419,7 +351,9 @@ snip_shutdown_write_buffer_on_flushed(struct bufferevent *bev, void *ctx) {
         }
     }
     else if(bev == session->client_bev) {
-        if(session->client_state == snip_socket_state_input_eof) {
+        if(session->client_state == snip_socket_state_input_eof ||
+                session->client_state == snip_socket_state_input_discard)
+        {
             session->client_state = snip_socket_state_finished;
             session->client_bev = NULL;
             bufferevent_free(bev);
@@ -562,7 +496,8 @@ snip_target_event_cb(
 
                     // Similarly, we're done reading from the target.  Finish writing to the client.
                     if (session->client_state == snip_socket_state_connected ||
-                        session->client_state == snip_socket_state_input_eof) {
+                            session->client_state == snip_socket_state_input_eof ||
+                            session->client_state == snip_socket_state_input_discard) {
                         snip_client_finish_writing(session);
                     }
 
@@ -600,7 +535,7 @@ void
 snip_session_apply_route(snip_session_t *session, snip_config_route_t *route) {
     snip_context_t *context = session->context;
     struct evbuffer *input_from_client = bufferevent_get_input(session->client_bev);
-    if(route->action == snip_route_action_tls_passthrough) {
+    if(route->action == snip_route_action_tls_pass_through) {
         session->target_state = snip_socket_state_connecting;
         session->target_bev = bufferevent_socket_new(context->event_base, -1, BEV_OPT_CLOSE_ON_FREE);
 
@@ -645,10 +580,39 @@ snip_session_apply_route(snip_session_t *session, snip_config_route_t *route) {
         session->state = snip_session_state_waiting_for_connect;
         return;
     }
+    else if(route->action == snip_route_action_send_file) {
+        if(session->client_state == snip_socket_state_connected) {
+            session->client_state = snip_socket_state_input_discard;
+            int source_file = open(route->send_file, O_RDONLY);
+            if(source_file < 0) {
+                snip_log(SNIP_LOG_LEVEL_WARNING,
+                         "%s: failed to open source file: (%d) %s.",
+                         session->description,
+                         errno,
+                         strerror(errno)
+                );
+                snip_session_apply_route(session, snip_get_route_for_proxy_connect_failure(session->listener));
+                return;
+            }
+            evbuffer_add_file(bufferevent_get_output(session->client_bev), source_file, 0, -1);
+            snip_client_finish_writing(session);
+        }
+        return;
+    }
+    else if(route->action == snip_route_action_send_text) {
+        if(session->client_state == snip_socket_state_connected) {
+            session->client_state = snip_socket_state_input_discard;
+            evbuffer_add(bufferevent_get_output(session->client_bev), route->send_text, strlen(route->send_text));
+            snip_client_finish_writing(session);
+        }
+        return;
+    }
     else {
         // TODO - Right now we're implementing all other actions as a hangup.  Implement TLS Alert protocol.
         snip_log(SNIP_LOG_LEVEL_INFO, "%s: Hanging up.", session->description);
-        session->state = snip_session_state_shutting_down;
+        if(session->client_state == snip_socket_state_connected) {
+            session->client_state = snip_socket_state_input_discard;
+        }
         snip_session_destroy(session);
     }
 
@@ -697,6 +661,12 @@ snip_client_read_cb(
 
     struct evbuffer *input_from_client = bufferevent_get_input(bev);
     while(TRUE) {
+        // In a few cases we want to hold the read channel open, but discard anything the remote sends.
+        if(session->client_state == snip_socket_state_input_discard) {
+            evbuffer_drain(input_from_client, evbuffer_get_length(input_from_client));
+            return;
+        }
+
         if(session->state == snip_session_state_initial) {
             snip_tls_record_reset(&(session->current_record));
             session->state = snip_session_state_waiting_for_tls_client_hello;
@@ -799,10 +769,6 @@ snip_client_read_cb(
             bufferevent_write_buffer(session->target_bev, input_from_client);
             return;
         }
-        else if(session->state == snip_session_state_shutting_down)
-        {
-            return;
-        }
         else if(session->state == snip_session_state_tls_protocol_error) {
             if(snip_session_is_client_http(session)) {
                 // This content looks like HTTP, we can direct them an HTTP server, or display an error, or redirect.
@@ -856,8 +822,10 @@ snip_client_event_cb(
             }
 
             // Similarly, we're done reading from the client.  Finish writing to the target.
-            if (session->target_state== snip_socket_state_connected ||
-                session->target_state== snip_socket_state_input_eof) {
+            if (session->target_state == snip_socket_state_connected ||
+                    session->target_state == snip_socket_state_input_eof ||
+                    session->target_state == snip_socket_state_input_discard)
+            {
                 snip_target_finish_writing(session);
             }
 
@@ -958,7 +926,7 @@ snip_accept_error_cb(struct evconnlistener *evconn, void *ctx)
 SNIP_BOOLEAN
 snip_listen(snip_context_ref_t context, snip_config_t *config, snip_config_listener_t *listener) {
     // We pass the config in directly instead of getting it from context because on a reload it hasn't been set yet.
-    listener->config = snip_config_retain(config);
+    snip_config_retain(listener->config);
 
     // The user can specify a bind address, or just a port.  If they JUST specify the port, we assume a dual-stack setup
     // and need to initialize the addresses.
@@ -1179,7 +1147,6 @@ void * snip_run_network(void *ctx)
  */
 void
 snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener_t *new_listener) {
-    new_listener->config = old_listener->config;
     new_listener->libevent_listener_4 = old_listener->libevent_listener_4;
     old_listener->libevent_listener_4 = NULL;
     new_listener->libevent_listener_6 = old_listener->libevent_listener_6;
@@ -1194,7 +1161,6 @@ snip_listener_replace(snip_config_listener_t *old_listener, snip_config_listener
     if(new_listener->libevent_listener_6) {
         evconnlistener_set_cb(new_listener->libevent_listener_6, snip_accept_incoming_cb, new_listener);
     }
-    snip_config_release(old_listener->config);
 }
 
 /**
