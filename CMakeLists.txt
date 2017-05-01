@@ -9,6 +9,8 @@ set(CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} "${CMAKE_SOURCE_DIR}/third_party/li
 
 set(CMAKE_C_STANDARD 99)
 
+find_package( Threads )
+
 option(SNIP__DOWNLOAD_AND_BUILD_DEPENDENCIES
     "Download and build dependencies files." OFF)
 
@@ -40,9 +42,9 @@ endif()
 
 
 
-include_directories(${LIBEVENT_INCLUDE_DIRS} ${LibYAML_INCLUDE_DIRS})
+include_directories(${LIBEVENT_INCLUDE_DIRS})
+include_directories(${LibYAML_INCLUDE_DIRS})
 set(LIBS ${LIBS} ${LIBEVENT_LIBRARIES} ${LibYAML_LIBRARIES})
-
 
 
 #find_package(OpenSSL REQUIRED)
@@ -53,6 +55,7 @@ set(SOURCE_FILES snip.c snip.h tls.h compat.h config.c config.h log.c log.h net_
 add_executable(snip main.c ${SOURCE_FILES})
 
 
+target_link_libraries(snip ${CMAKE_THREAD_LIBS_INIT} )
 
 target_compile_definitions(snip
         PUBLIC SNIP_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
@@ -63,7 +66,7 @@ target_compile_definitions(snip
 
 add_subdirectory(tests)
 
-target_link_libraries(snip ${LIBS})
+target_link_libraries(snip ${LIBS} event yaml)
 
 # We build this as a library so we can test with it.  May eventually make it available this way also though.
 add_library(snip_lib ${SOURCE_FILES})
@@ -73,7 +76,8 @@ target_compile_definitions(snip_lib
         PUBLIC SNIP_INSTALL_CONF_PATH="${CMAKE_INSTALL_CONF_DIR}snip.yml"
         PUBLIC SNIP_VERSION="${SNIP_VERSION}"
         )
-target_link_libraries(snip_lib ${LIBS})
+target_link_libraries(snip_lib ${LIBS} event yaml)
+target_link_libraries(snip_lib ${CMAKE_THREAD_LIBS_INIT} )
 
 if(SNIP__DOWNLOAD_AND_BUILD_DEPENDENCIES) 
 # If we downloaded dependencies, we should build, require, and use them.

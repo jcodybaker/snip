@@ -8,6 +8,8 @@
 #include <event2/buffer.h>
 #include <string.h>
 
+const void *NPTR = NULL;
+
 /**
  * Quick and dirty, blocking read a file into an evbuffer.
  * @param path - Path to the file we want to read.
@@ -152,7 +154,7 @@ TEST(tls, snip_tls_compare_tls_version_test) {
 TEST(tls, snip_tls_handshake_parse_test) {
     struct evbuffer *test_data = load_file_to_evbuffer(
             SNIP_TEST_CAPTURES "/osx_10.12.3_safari_10.0.3_12602.4.8_client_hello.raw");
-    EXPECT_NE(test_data, nullptr);
+    EXPECT_NE(test_data, NPTR);
     snip_tls_handshake_message_t message;
     snip_tls_handshake_message_reset(&message);
     snip_tls_handshake_message_parser_context_t parser_context;
@@ -179,7 +181,7 @@ TEST(tls, snip_tls_handshake_parse_test) {
 TEST(tls, snip_tls_handshake_parse_multiple_records_test) {
     struct evbuffer *test_data = load_file_to_evbuffer(
     SNIP_TEST_CAPTURES "/osx_10.12.3_safari_10.0.3_12602.4.8_client_hello.raw");
-    EXPECT_NE(test_data, nullptr);
+    EXPECT_NE(test_data, NPTR);
     snip_tls_handshake_message_t message;
     snip_tls_handshake_message_reset(&message);
     snip_tls_handshake_message_parser_context_t parser_context;
@@ -247,7 +249,7 @@ TEST(tls, snip_tls_handshake_parse_multiple_records_test) {
 TEST(tls, snip_tls_handshake_client_hello_parse_test) {
     struct evbuffer *test_data = load_file_to_evbuffer(
             SNIP_TEST_CAPTURES "/osx_10.12.3_safari_10.0.3_12602.4.8_client_hello.raw");
-    EXPECT_NE(test_data, nullptr);
+    EXPECT_NE(test_data, NPTR);
     snip_tls_handshake_message_t message;
     snip_tls_handshake_message_reset(&message);
     snip_tls_handshake_message_parser_context_t parser_context;
@@ -287,7 +289,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_test) {
 TEST(tls, snip_tls_handshake_client_hello_parse_chrome_test) {
     struct evbuffer *test_data = load_file_to_evbuffer(
             SNIP_TEST_CAPTURES "/osx_10.12.3_chrome_57.0.2984.133_client_hello.raw");
-    EXPECT_NE(test_data, nullptr);
+    EXPECT_NE(test_data, NPTR);
     snip_tls_handshake_message_t message;
     snip_tls_handshake_message_reset(&message);
     snip_tls_handshake_message_parser_context_t parser_context;
@@ -327,7 +329,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_chrome_test) {
 TEST(tls, snip_tls_handshake_client_hello_parse_edge_test) {
     struct evbuffer *test_data = load_file_to_evbuffer(
             SNIP_TEST_CAPTURES "/windows_10_1607_14393.693_edge_38.14393.0.0_client_hello.raw");
-    EXPECT_NE(test_data, nullptr);
+    EXPECT_NE(test_data, NPTR);
     snip_tls_handshake_message_t message;
     snip_tls_handshake_message_reset(&message);
     snip_tls_handshake_message_parser_context_t parser_context;
@@ -367,7 +369,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_edge_test) {
 TEST(tls, snip_tls_handshake_client_hello_parse_old_firefox_test) {
     struct evbuffer *test_data = load_file_to_evbuffer(
             SNIP_TEST_CAPTURES "/osx_10.12.3_firefox_3.6.28_client_hello.raw");
-    EXPECT_NE(test_data, nullptr);
+    EXPECT_NE(test_data, NPTR);
     snip_tls_handshake_message_t message;
     snip_tls_handshake_message_reset(&message);
     snip_tls_handshake_message_parser_context_t parser_context;
@@ -407,7 +409,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_old_firefox_test) {
 TEST(tls, snip_tls_handshake_client_hello_parse_firefox_test) {
     struct evbuffer *test_data = load_file_to_evbuffer(
             SNIP_TEST_CAPTURES "/osx_10.12.3_firefox_52.0.2_client_hello.raw");
-    EXPECT_NE(test_data, nullptr);
+    EXPECT_NE(test_data, NPTR);
     snip_tls_handshake_message_t message;
     snip_tls_handshake_message_reset(&message);
     snip_tls_handshake_message_parser_context_t parser_context;
@@ -447,7 +449,7 @@ TEST(tls, snip_tls_handshake_client_hello_parse_firefox_test) {
 TEST(tls, snip_tls_handshake_client_hello_parse_chrome_tls13_test) {
     struct evbuffer *test_data = load_file_to_evbuffer(
             SNIP_TEST_CAPTURES "/osx_10.12.3_chrome_60.0.3074.0_with_tls_1.3_client_hello.raw");
-    EXPECT_NE(test_data, nullptr);
+    EXPECT_NE(test_data, NPTR);
     snip_tls_handshake_message_t message;
     snip_tls_handshake_message_reset(&message);
     snip_tls_handshake_message_parser_context_t parser_context;
