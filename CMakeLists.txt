@@ -4,8 +4,8 @@ project(snip)
 set(SNIP_VERSION 0.1)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
-set(CMAKE_LIBRARY_PATH ${CMAKE_LIBRARY_PATH} "${CMAKE_SOURCE_DIR}/third_party/libevent/" "/usr/lib/" "/usr/local/lib/" )
-set(CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} "${CMAKE_SOURCE_DIR}/third_party/libevent/include" "/usr/include/" "/usr/local/include/" )
+set(CMAKE_LIBRARY_PATH ${CMAKE_LIBRARY_PATH} "/usr/lib/" "/usr/local/lib/" )
+set(CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} "${CMAKE_SOURCE_DIR}/third_party/libevent/include" "${CMAKE_SOURCE_DIR}/third_party/libyaml/include" "/usr/include/" "/usr/local/include/" )
 
 set(CMAKE_C_STANDARD 99)
 
@@ -19,13 +19,13 @@ if(SNIP__DOWNLOAD_AND_BUILD_DEPENDENCIES)
 	set(EVENT__DISABLE_OPENSSL ON)
 	set(EVENT__DISABLE_TESTS ON)
 	add_subdirectory("third_party/libevent")
-	set(LIBEVENT_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/third_party/libevent/include")
+	# set(LIBEVENT_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/third_party/libevent/include")
+
 	if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/libyaml/include/yaml.h")
 		execute_process(COMMAND "git" "clone" "https://github.com/yaml/libyaml.git" "${CMAKE_SOURCE_DIR}/third_party/libyaml")
 	endif()
 	add_subdirectory("third_party/libyaml")
 	set(LibYAML_INCLUDE_DIRS "${CMAKE_SOURCE_DIR}/third_party/libyaml/include")
-	set(LibYAML_LIBRARIES "${CMAKE_SOURCE_DIR}/third_party/libyaml")
 else ()
 	find_package(LibYAML)
 	include_directories(${LibYAML_INCLUDE_DIRS})
@@ -40,8 +40,8 @@ endif()
 
 
 
-include_directories(${LIBEVENT_INCLUDE_DIRS})
-set(LIBS ${LIBS} ${LIBEVENT_LIBRARIES})
+include_directories(${LIBEVENT_INCLUDE_DIRS} ${LibYAML_INCLUDE_DIRS})
+set(LIBS ${LIBS} ${LIBEVENT_LIBRARIES} ${LibYAML_LIBRARIES})
 
 
 
