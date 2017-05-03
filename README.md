@@ -202,8 +202,10 @@ This software is currently pre-1.0, meaning that while it works, the feature set
  this project or contact me at cody@codybaker.com.
 
 * Regex matching / targets
-* Windows support - TLS SNIp uses libevent to smooth over lots of network API differences between BSD, Linux, and 
-  Windows, so it may "Just Work".  Needs to be verified.  Likely problems in threading, and privilege drop.
+* Improve Windows support - 
+  + Provide support for installing / running as we Windows Service
+  + Investigate minimum permissions necessary.
+  + Provide option for hot-reloading configuration.
 * International URLs
 * DNS caching - On some platforms the DNS resolver used may issue DNS requests for each connection instead of internally
   caching or using the systems own cache.
@@ -222,6 +224,21 @@ This software is currently pre-1.0, meaning that while it works, the feature set
 * Route matching based on TLS version.
 * Ability to filter unsafe client versions and/or avoid vulnerabilities.
 * Better control of buffers.
+
+## Compatibility
+This product is still pre-1.0 and as such still has some features / glitches.  As of May 2017 the following
+ compatibility/completeness issues are known.
+
+### OSX
+Supports all features.  Given that most environments don't provide libevent-2.1 or libyaml by default, building with 
+"-D SNIP__DOWNLOAD_AND_BUILD_DEPENDENCIES=on" is recommended.
+
+### Windows
+In progress.  Compiles and runs, but not well tested.  Known issues: does not take command line arguments, or support hot reloads.  
+
+### Linux
+Supports all features.  Most environments currently only provide libevent-2.0.  Work will be done to support libevent 
+2.0 in the future.
 
 ## Copyright & License
 TLS SNIp is copyright 2017 J Cody Baker. All rights reserved.  The project is licensed for use under an MIT-style
