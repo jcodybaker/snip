@@ -1,5 +1,9 @@
 # TLS SNIp - An SNI Based Proxy
 
+## Note:
+This product is pre-1.0 and in active development as of April 2017.  See the Compatibility section for full status 
+more information
+
 ## What is TLS?
 Transport Layer Security (TLS), known as SSL (Secure Socket Layer) in previous protocol versions, is used to secure 
 network communications between two application end-points (generally client and server software).  TLS provides
