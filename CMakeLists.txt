@@ -4,7 +4,10 @@ project(snip)
 set(SNIP_VERSION 0.1)
 
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_SOURCE_DIR}/cmake/Modules/")
-set(CMAKE_LIBRARY_PATH ${CMAKE_LIBRARY_PATH} "/usr/lib/" "/usr/local/lib/" )
+set(CMAKE_LIBRARY_PATH ${CMAKE_LIBRARY_PATH} "/usr/lib/" "/usr/local/lib/")
+set(CMAKE_INCLUDE_PATH ${CMAKE_INCLUDE_PATH} "/usr/include/" "/usr/local/include/")
+
+
 
 set(CMAKE_C_STANDARD 99)
 
@@ -13,8 +16,8 @@ find_package( Threads )
 option(SNIP__DOWNLOAD_AND_BUILD_DEPENDENCIES
     "Download and build dependencies files." OFF)
 
+
 if(SNIP__DOWNLOAD_AND_BUILD_DEPENDENCIES)
-	set(CMAKE_INCLUDE_PATH  "/usr/include/" "/usr/local/include/" ${CMAKE_INCLUDE_PATH})
 	if(NOT EXISTS "${CMAKE_SOURCE_DIR}/third_party/libevent/include/event2/event.h")
 		execute_process(COMMAND "git" "clone" "-b" "patches-2.1" "https://github.com/libevent/libevent.git" "${CMAKE_SOURCE_DIR}/third_party/libevent")
 	endif()
@@ -39,8 +42,6 @@ else ()
 	endif()
 	set(LIBS ${LIBS} ${LIBEVENT_LIBRARIES} ${LibYAML_LIBRARIES})
 endif()
-
-
 
 
 include_directories(${LIBEVENT_INCLUDE_DIRS})
